@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, Menu, session } from 'electron';
+import { app, BrowserWindow, globalShortcut, Menu, session, desktopCapturer } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { ConfigStore } from './storage/configStore';
@@ -125,17 +125,21 @@ if (!gotLock) {
     streamingManager = new StreamingManager(() => mainWindow);
 
     // Modern Electron getDisplayMedia handler with system loopback audio
+    // Passes the raw DesktopCapturerSource for exact native C++ WebRTC compatibility
     session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
       try {
-        const sources = await screenCaptureManager.getAvailableSources();
+        const rawSources = await desktopCapturer.getSources({
+          types: ['screen', 'window'],
+          thumbnailSize: { width: 1, height: 1 },
+        });
         const targetId = screenCaptureManager.getSelectedDisplayId();
-        const chosen = sources.find((s) => s.id === targetId) ||
-                       sources.find((s) => s.isDisplay) ||
-                       sources[0];
+        const chosenRaw = rawSources.find((s) => s.id === targetId) ||
+                          rawSources.find((s) => s.id.startsWith('screen:')) ||
+                          rawSources[0];
 
-        if (chosen) {
-          console.log(`[DisplayMedia] Granting display capture for: "${chosen.name}" (${chosen.id})`);
-          callback({ video: chosen as any, audio: 'loopback' });
+        if (chosenRaw) {
+          console.log(`[DisplayMedia] Granting display capture for: "${chosenRaw.name}" (${chosenRaw.id})`);
+          callback({ video: chosenRaw, audio: 'loopback' });
         } else {
           callback({});
         }

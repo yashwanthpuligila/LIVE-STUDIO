@@ -30,6 +30,8 @@ export class CompositionEngine {
   private videoElements: Map<string, HTMLVideoElement> = new Map();
   // MediaStreams for sources
   private sourceStreams: Map<string, MediaStream> = new Map();
+  // Primary desktop screen video element reference for cross-scene fallback
+  private primaryScreenVideo: HTMLVideoElement | null = null;
 
   // Active scene & annotation canvas reference
   private activeScene: Scene | null = null;
@@ -94,7 +96,7 @@ export class CompositionEngine {
   }
 
   // Attach a screen/window media stream to a source ID
-  public async setSourceStream(sourceId: string, stream: MediaStream) {
+  public async setSourceStream(sourceId: string, stream: MediaStream, isScreen: boolean = false) {
     // Clean up old video element if any
     const oldVideo = this.videoElements.get(sourceId);
     if (oldVideo) {
@@ -117,6 +119,10 @@ export class CompositionEngine {
 
     this.videoElements.set(sourceId, video);
     this.sourceStreams.set(sourceId, stream);
+
+    if (isScreen || sourceId.includes('screen') || sourceId.includes('Display')) {
+      this.primaryScreenVideo = video;
+    }
   }
 
   public getSourceStream(sourceId: string): MediaStream | undefined {
@@ -250,7 +256,13 @@ export class CompositionEngine {
         ctx.fillText(source.text, sx + 20, sy + sh / 2);
       } else {
         // Render video element (Screen or Webcam)
-        const video = this.videoElements.get(source.id);
+        let video = this.videoElements.get(source.id);
+        if ((!video || video.readyState < 2) && (source.type === 'screen' || source.type === 'window')) {
+          if (this.primaryScreenVideo && this.primaryScreenVideo.readyState >= 2 && !this.primaryScreenVideo.paused) {
+            video = this.primaryScreenVideo;
+          }
+        }
+
         if (video && video.readyState >= 2 && !video.paused) {
           ctx.drawImage(video, sx, sy, sw, sh);
         } else {

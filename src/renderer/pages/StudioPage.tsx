@@ -429,7 +429,11 @@ export const StudioPage: React.FC<StudioPageProps> = ({
         }
 
         const targetSourceId = screenSource.id;
-        await engineRef.current.setSourceStream(targetSourceId, stream);
+        await engineRef.current.setSourceStream(
+          targetSourceId,
+          stream,
+          source.isDisplay || source.id.startsWith('screen:')
+        );
 
         const updatedScenes = scenes.map((sc) =>
           sc.id === currentScene.id ? { ...sc, sources: updatedSources } : sc
