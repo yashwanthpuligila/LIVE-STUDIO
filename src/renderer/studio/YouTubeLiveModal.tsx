@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Radio, Eye, EyeOff, ExternalLink, AlertTriangle, CheckCircle, Wifi, X } from 'lucide-react';
 import { StreamConfig, StreamStats, StreamStatus } from '../../shared/types';
 
@@ -10,6 +10,7 @@ interface YouTubeLiveModalProps {
   streamKey: string;
   onUpdateStreamKey: (key: string) => void;
   rtmpUrl: string;
+  outputFps?: number;
   onStartStream: (config: StreamConfig) => Promise<void>;
   onStopStream: () => Promise<void>;
   error?: string | null;
@@ -23,16 +24,21 @@ export const YouTubeLiveModal: React.FC<YouTubeLiveModalProps> = ({
   streamKey,
   onUpdateStreamKey,
   rtmpUrl,
+  outputFps = 30,
   onStartStream,
   onStopStream,
   error,
 }) => {
   const [showKey, setShowKey] = useState(false);
-  const [streamTitle, setStreamTitle] = useState('Live Studio Broadcast');
+  const [streamTitle, setStreamTitle] = useState('KLH Lecture');
   const [bitrate, setBitrate] = useState(4500);
-  const [fps, setFps] = useState(60);
+  // Default to the composition frame rate; streaming above it only duplicates frames
+  const [fps, setFps] = useState<number>(outputFps);
   const [confirmStop, setConfirmStop] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
+
+  // Settings load after mount; follow the output frame rate until the user picks one
+  useEffect(() => setFps(outputFps), [outputFps]);
 
   if (!isOpen) return null;
 

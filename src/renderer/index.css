@@ -1,5 +1,22 @@
 @import "tailwindcss";
 
+/* KLH brand: the UI accent palette ("blue-*" utilities) is remapped to KLH maroon (#9B2B2A).
+   300/400 are lightened so accent text stays readable on the dark studio background. */
+@theme {
+  --color-blue-50: #fbf2f2;
+  --color-blue-100: #f6e1e1;
+  --color-blue-200: #efc4c3;
+  --color-blue-300: #f2a9a6;
+  --color-blue-400: #e8817d;
+  --color-blue-500: #c9443f;
+  --color-blue-600: #9b2b2a;
+  --color-blue-700: #82221f;
+  --color-blue-800: #6b1d1b;
+  --color-blue-900: #571a19;
+  --color-blue-950: #2f0b0a;
+  --color-indigo-500: #b8322f;
+}
+
 @layer base {
   :root {
     --bg-main: #0c0d10;

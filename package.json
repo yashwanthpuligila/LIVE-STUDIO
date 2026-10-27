@@ -1,7 +1,7 @@
 {
   "name": "live-studio",
   "version": "1.0.0",
-  "description": "Professional Screen Recording and YouTube Streaming Studio Desktop Application",
+  "description": "KLH Lecture Studio - lecture recording and YouTube streaming for KLH University, Aziznagar Campus",
   "type": "module",
   "main": "dist/main/index.cjs",
   "scripts": {
@@ -14,7 +14,7 @@
     "test": "esbuild tests/runTests.ts --bundle --platform=node --outfile=dist/tests/runTests.cjs --external:electron --external:ffmpeg-static && node dist/tests/runTests.cjs",
     "start": "npm run build && electron dist/main/index.cjs",
     "dev": "npm run build:main && npm run build:preload && concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron dist/main/index.cjs\"",
-    "app": "powershell -Command \"Start-Process 'release/win-unpacked/Live Studio.exe'\"",
+    "app": "powershell -Command \"Start-Process 'release/win-unpacked/KLH Lecture Studio.exe'\"",
     "dist": "npm run build && electron-builder --win"
   },
   "keywords": [
@@ -25,7 +25,7 @@
     "youtube-live",
     "electron"
   ],
-  "author": "Live Studio Team",
+  "author": "KLH University - Aziznagar Campus",
   "license": "MIT",
   "dependencies": {
     "clsx": "^2.1.1",
@@ -55,8 +55,8 @@
     "wait-on": "^9.5.1"
   },
   "build": {
-    "appId": "com.livestudio.app",
-    "productName": "Live Studio",
+    "appId": "in.edu.klh.lecturestudio",
+    "productName": "KLH Lecture Studio",
     "directories": {
       "output": "release"
     },
@@ -72,13 +72,16 @@
       "target": [
         "nsis",
         "portable"
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     }
   }
 }

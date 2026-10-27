@@ -34,6 +34,7 @@ export interface StreamConfig {
   fps: number;
   videoBitrate: number; // in kbps e.g. 4500
   audioBitrate: number; // in kbps e.g. 128
+  inputCodec?: RecorderVideoCodec; // codec of the webm/mkv chunks piped to FFmpeg
 }
 
 export interface RecordingItem {
@@ -137,7 +138,59 @@ export interface PerformanceMetrics {
   streamingStatus: StreamStatus;
 }
 
+export type HardwareTier = 'low' | 'balanced' | 'high';
+
+export interface HardwareProfile {
+  tier: HardwareTier;
+  cpuModel: string;
+  logicalCores: number;
+  totalMemoryGb: number;
+  gpus: string[];
+  hasDiscreteGpu: boolean;
+  recommended: Pick<AppSettings, 'resolutionPreset' | 'width' | 'height' | 'fps' | 'videoBitrateKbps' | 'lowEndOptimization'>;
+}
+
+export type RecorderVideoCodec = 'h264' | 'vp8' | 'vp9';
+
+export interface RecordingStartOptions {
+  outputDir?: string;
+  // Used to build a readable file name, e.g. KLH_Data-Structures_Dr-Rao_2026-10-27...
+  lectureTitle?: { professorName?: string; subject?: string };
+  resolution?: string;
+  fps?: number;
+  videoCodec?: RecorderVideoCodec;
+  videoBitrateKbps?: number;
+}
+
+// Typed by the professor; burned into the recording as a top banner and a name tag under the webcam
+export interface LectureInfo {
+  professorName: string;
+  subject: string;
+  showBanner: boolean;
+  showNameTag: boolean;
+}
+
+export type BrandClipKind = 'intro' | 'outro';
+
+export interface BrandClip {
+  originalName: string;
+  durationSec: number;
+  sizeBytes: number;
+  updatedAt: string;
+}
+
+// Admin-controlled branding. Intro/outro are set behind the admin PIN and cannot be changed by professors.
+export interface BrandingInfo {
+  hasAdminPin: boolean;
+  intro: BrandClip | null;
+  outro: BrandClip | null;
+}
+
 export interface AppSettings {
+  lectureInfo?: LectureInfo;
+  // Set once the first-launch hardware auto-tune has been applied
+  autoTuned?: boolean;
+  hardwareTier?: HardwareTier;
   recordingProfile: 'balanced' | 'high' | 'ultra' | 'custom';
   resolutionPreset: '1080p' | '720p' | '4k';
   width: number;

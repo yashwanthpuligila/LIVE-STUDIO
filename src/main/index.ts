@@ -4,10 +4,12 @@ import fs from 'fs';
 import { ConfigStore } from './storage/configStore';
 import { RecordingsStore } from './storage/recordingsStore';
 import { ScenesStore } from './storage/scenesStore';
+import { BrandingStore } from './storage/brandingStore';
 import { ScreenCaptureManager } from './capture/screenCapture';
 import { RecordingManager } from './recording/recordingManager';
 import { StreamingManager } from './streaming/streamingManager';
 import { EncoderDetector } from './recording/encoderDetector';
+import { getHardwareProfile } from './system/hardwareProfile';
 import { registerIpcHandlers } from './ipc';
 
 // --- Critical Chromium Flags to Prevent Background / Occlusion Throttling ---
@@ -22,6 +24,7 @@ let mainWindow: BrowserWindow | null = null;
 let configStore: ConfigStore;
 let recordingsStore: RecordingsStore;
 let scenesStore: ScenesStore;
+let brandingStore: BrandingStore;
 let screenCaptureManager: ScreenCaptureManager;
 let recordingManager: RecordingManager;
 let streamingManager: StreamingManager;
@@ -35,7 +38,9 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 700,
     backgroundColor: '#0c0d10',
-    title: 'Live Studio',
+    title: 'KLH Lecture Studio',
+    // Packaged builds take the icon from the .exe; this covers dev runs
+    icon: fs.existsSync(path.join(__dirname, '../../build/icon.ico')) ? path.join(__dirname, '../../build/icon.ico') : undefined,
     webPreferences: {
       preload: fs.existsSync(path.join(__dirname, '../preload/index.cjs'))
         ? path.join(__dirname, '../preload/index.cjs')
@@ -120,6 +125,7 @@ if (!gotLock) {
     configStore = new ConfigStore();
     recordingsStore = new RecordingsStore();
     scenesStore = new ScenesStore();
+    brandingStore = new BrandingStore();
     screenCaptureManager = new ScreenCaptureManager();
     recordingManager = new RecordingManager(recordingsStore);
     streamingManager = new StreamingManager(() => mainWindow);
@@ -149,10 +155,17 @@ if (!gotLock) {
       }
     });
 
-    // Detect hardware encoders in background
-    EncoderDetector.detectEncoders().then((encoders) => {
-      console.log(`[Hardware Detection] Available encoders: ${encoders.filter(e => e.isAvailable).map(e => e.name).join(', ')}`);
-    }).catch(console.error);
+    // Classify the machine and, on first launch only, pick capture settings it can sustain.
+    // Users who later change settings keep their choice (autoTuned stays true).
+    const profile = await getHardwareProfile();
+    console.log(`[Hardware] ${profile.cpuModel} | ${profile.logicalCores} threads | ${profile.totalMemoryGb} GB | ${profile.gpus.join(', ') || 'unknown GPU'} -> tier "${profile.tier}"`);
+    const current = configStore.getSettings();
+    if (!current.autoTuned) {
+      configStore.updateSettings({ ...profile.recommended, recordingProfile: 'balanced', hardwareTier: profile.tier, autoTuned: true });
+    } else if (current.hardwareTier !== profile.tier) {
+      configStore.updateSettings({ hardwareTier: profile.tier });
+    }
+    EncoderDetector.setPreferred(current.selectedEncoderId);
 
     registerIpcHandlers(
       () => mainWindow,
@@ -161,11 +174,20 @@ if (!gotLock) {
       scenesStore,
       recordingManager,
       streamingManager,
-      screenCaptureManager
+      screenCaptureManager,
+      brandingStore
     );
 
     createWindow();
     registerShortcuts();
+
+    // Detect hardware encoders after the window is up so probing doesn't compete with startup.
+    // Results are cached on disk, so this is instant after the first launch.
+    const detect = () => EncoderDetector.detectEncoders(profile.gpus.join('|')).then((encoders) => {
+      console.log(`[Hardware Detection] Available encoders: ${encoders.filter(e => e.isAvailable).map(e => e.name).join(', ')}`);
+    }).catch(console.error);
+    if (mainWindow) mainWindow.once('ready-to-show', () => setTimeout(detect, 1500));
+    else detect();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

@@ -3,9 +3,9 @@ import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
 import { getFFmpegPath } from '../utils/ffmpegHelper';
-import { RecordingItem, RecordingStatus } from '../../shared/types';
+import { RecorderVideoCodec, RecordingItem, RecordingStartOptions, RecordingStatus } from '../../shared/types';
 import { RecordingsStore } from '../storage/recordingsStore';
-import { EncoderDetector } from './encoderDetector';
+import { EncoderDetector, buildEncoderArgs } from './encoderDetector';
 
 interface ActiveSession {
   id: string;
@@ -16,6 +16,8 @@ interface ActiveSession {
   thumbnailPath: string;
   resolution: string;
   fps: number;
+  videoCodec: RecorderVideoCodec;
+  videoBitrateKbps: number;
   writeStream: fs.WriteStream | null;
   startTime: number;
   pauseTime: number;
@@ -58,11 +60,7 @@ export class RecordingManager {
     };
   }
 
-  public startRecording(options: {
-    outputDir?: string;
-    resolution?: string;
-    fps?: number;
-  }): { id: string; filename: string } {
+  public startRecording(options: RecordingStartOptions): { id: string; filename: string } {
     if (this.activeSession && (this.activeSession.status === 'recording' || this.activeSession.status === 'paused')) {
       throw new Error('A recording session is already in progress');
     }
@@ -75,7 +73,9 @@ export class RecordingManager {
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const id = `rec_${Date.now()}`;
-    const filename = `LiveStudio_${timestamp}.mp4`;
+    const slug = (v?: string) => (v || '').trim().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    const titleParts = [slug(options.lectureTitle?.subject), slug(options.lectureTitle?.professorName)].filter(Boolean);
+    const filename = `KLH_${titleParts.length ? titleParts.join('_') + '_' : ''}${timestamp}.mp4`;
     
     const outputDir = options.outputDir && fs.existsSync(options.outputDir)
       ? options.outputDir
@@ -90,7 +90,9 @@ export class RecordingManager {
       fs.mkdirSync(thumbsDir, { recursive: true });
     }
 
-    const tempWebmPath = path.join(tempDir, `${id}.webm`);
+    const videoCodec = options.videoCodec || 'vp8';
+    // H.264 from MediaRecorder is written as Matroska; VP8/VP9 as WebM. FFmpeg probes either way.
+    const tempWebmPath = path.join(tempDir, `${id}.${videoCodec === 'h264' ? 'mkv' : 'webm'}`);
     const finalMp4Path = path.join(outputDir, filename);
     const thumbnailPath = path.join(thumbsDir, `${id}.jpg`);
 
@@ -111,6 +113,8 @@ export class RecordingManager {
       thumbnailPath,
       resolution: options.resolution || '1920x1080',
       fps: options.fps || 30,
+      videoCodec,
+      videoBitrateKbps: options.videoBitrateKbps || 5000,
       writeStream,
       startTime: Date.now(),
       pauseTime: 0,
@@ -186,16 +190,18 @@ export class RecordingManager {
     }
 
     const ffmpegPath = getFFmpegPath();
+    await EncoderDetector.detectEncoders().catch(() => undefined);
     const activeEncoder = EncoderDetector.getActiveEncoder();
     let successfulEncoder = activeEncoder.name;
 
-    // Helper to run ffmpeg with specific encoder parameters
-    const runTranscode = (encoderArgs: string[]): Promise<boolean> => {
+    // Helper to run ffmpeg with specific video encoder parameters
+    const runTranscode = (videoArgs: string[]): Promise<boolean> => {
       return new Promise((resolve) => {
         const fullArgs = [
           '-y',
+          '-hide_banner',
           '-i', session.tempWebmPath,
-          ...encoderArgs,
+          ...videoArgs,
           '-c:a', 'aac',
           '-b:a', '160k',
           '-movflags', '+faststart',
@@ -206,7 +212,8 @@ export class RecordingManager {
         let stderr = '';
 
         proc.stderr.on('data', (d) => {
-          stderr += d.toString();
+          // Keep only the tail; long exports print a progress line every frame
+          stderr = (stderr + d.toString()).slice(-2000);
         });
 
         proc.on('close', (code) => {
@@ -228,22 +235,32 @@ export class RecordingManager {
       });
     };
 
-    // Stage 1: Try chosen hardware encoder if available
+    const target = {
+      bitrateKbps: session.videoBitrateKbps,
+      fps: session.fps,
+      mode: 'file' as const,
+      lowEnd: true, // post-processing should never hog the CPU
+    };
     let success = false;
-    if (activeEncoder.type === 'hardware' && activeEncoder.isAvailable) {
-      console.log(`[Recording] Attempting hardware encoding with ${activeEncoder.codec}...`);
-      let hwArgs: string[] = [];
-      if (activeEncoder.codec === 'h264_qsv') {
-        hwArgs = ['-c:v', 'h264_qsv', '-b:v', '5000k', '-preset', 'veryfast', '-pix_fmt', 'nv12'];
-      } else if (activeEncoder.codec === 'h264_mf') {
-        hwArgs = ['-c:v', 'h264_mf', '-b:v', '5000k'];
-      } else if (activeEncoder.codec === 'h264_nvenc') {
-        hwArgs = ['-c:v', 'h264_nvenc', '-preset', 'p4', '-b:v', '5000k', '-pix_fmt', 'yuv420p'];
-      } else {
-        hwArgs = ['-c:v', activeEncoder.codec, '-b:v', '5000k'];
-      }
 
-      success = await runTranscode(hwArgs);
+    // Stage 1: The browser already produced H.264 - just remux into MP4 (seconds, not minutes).
+    // Exception: high-motion content can make the browser encoder overshoot the bitrate badly,
+    // in which case a hardware re-encode is cheap and keeps file sizes sane.
+    if (session.videoCodec === 'h264') {
+      const recordedSec = Math.max(1, (Date.now() - session.startTime - session.totalPausedDuration) / 1000);
+      const actualKbps = (tempStat.size * 8) / 1000 / recordedSec;
+      const overshoot = actualKbps > session.videoBitrateKbps * 2.5;
+
+      if (!overshoot || activeEncoder.type !== 'hardware') {
+        success = await runTranscode(['-c:v', 'copy']);
+        if (success) successfulEncoder = 'H.264 (Live encoded, remuxed)';
+      }
+    }
+
+    // Stage 2: Re-encode with the detected hardware encoder
+    if (!success && activeEncoder.type === 'hardware' && activeEncoder.isAvailable) {
+      console.log(`[Recording] Encoding with ${activeEncoder.codec}...`);
+      success = await runTranscode(buildEncoderArgs(activeEncoder.codec, target));
       if (success) {
         successfulEncoder = `${activeEncoder.name} (Accelerated)`;
       } else {
@@ -251,26 +268,19 @@ export class RecordingManager {
       }
     }
 
-    // Stage 2: Software fallback with libx264
+    // Stage 3: Software fallback with libx264
     if (!success) {
       console.log('[Recording] Encoding with libx264 (CPU)...');
-      const swArgs = [
-        '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-crf', '22',
-        '-pix_fmt', 'yuv420p',
-      ];
-      success = await runTranscode(swArgs);
+      success = await runTranscode(buildEncoderArgs('libx264', target));
       if (success) {
         successfulEncoder = 'x264 Software Encoder (CPU)';
       }
     }
 
-    // Stage 3: Direct remux fallback if transcode failed
+    // Stage 4: Direct remux fallback if transcode failed
     if (!success) {
       console.log('[Recording] Transcode failed, falling back to direct stream copy...');
-      const copyArgs = ['-c', 'copy'];
-      success = await runTranscode(copyArgs);
+      success = await runTranscode(['-c:v', 'copy']);
       if (success) {
         successfulEncoder = 'Direct Stream Copy (Remux)';
       }
@@ -333,7 +343,7 @@ export class RecordingManager {
       fps: session.fps,
       createdAt: new Date().toISOString(),
       encoder: successfulEncoder,
-      tags: ['Tutorial', 'Screen Capture', successfulEncoder.includes('Accelerated') ? 'Hardware Accel' : 'Software'],
+      tags: ['Tutorial', 'Screen Capture', successfulEncoder.includes('Accelerated') ? 'Hardware Accel' : successfulEncoder.includes('remuxed') ? 'Fast Export' : 'Software'],
     };
 
     // Store in recordings registry

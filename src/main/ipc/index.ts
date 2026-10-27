@@ -1,5 +1,6 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { app, ipcMain, dialog, BrowserWindow } from 'electron';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { ScreenCaptureManager } from '../capture/screenCapture';
 import { RecordingManager } from '../recording/recordingManager';
@@ -7,8 +8,10 @@ import { StreamingManager } from '../streaming/streamingManager';
 import { ConfigStore } from '../storage/configStore';
 import { RecordingsStore } from '../storage/recordingsStore';
 import { ScenesStore } from '../storage/scenesStore';
+import { BrandingStore } from '../storage/brandingStore';
 import { EncoderDetector } from '../recording/encoderDetector';
-import { AppSettings, DiskSpaceInfo, Scene, StreamConfig } from '../../shared/types';
+import { getHardwareProfile } from '../system/hardwareProfile';
+import { AppSettings, BrandClipKind, DiskSpaceInfo, RecordingStartOptions, Scene, StreamConfig } from '../../shared/types';
 
 export function registerIpcHandlers(
   getMainWindow: () => BrowserWindow | null,
@@ -17,7 +20,8 @@ export function registerIpcHandlers(
   scenesStore: ScenesStore,
   recordingManager: RecordingManager,
   streamingManager: StreamingManager,
-  screenCaptureManager: ScreenCaptureManager
+  screenCaptureManager: ScreenCaptureManager,
+  brandingStore: BrandingStore
 ) {
   // --- Screen Capture ---
   ipcMain.handle('screenCapture:getSources', async () => {
@@ -34,7 +38,7 @@ export function registerIpcHandlers(
   });
 
   // --- Recording ---
-  ipcMain.handle('recording:start', async (_, options: { outputDir?: string; resolution?: string; fps?: number }) => {
+  ipcMain.handle('recording:start', async (_, options: RecordingStartOptions) => {
     return recordingManager.startRecording(options);
   });
 
@@ -110,7 +114,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle('settings:update', async (_, partial: Partial<AppSettings>) => {
     if (partial.selectedEncoderId) {
-      EncoderDetector.setActiveEncoder(partial.selectedEncoderId);
+      EncoderDetector.setPreferred(partial.selectedEncoderId);
     }
     return configStore.updateSettings(partial);
   });
@@ -118,6 +122,10 @@ export function registerIpcHandlers(
   // --- Hardware Encoders & Performance ---
   ipcMain.handle('system:getEncoders', async () => {
     return await EncoderDetector.detectEncoders();
+  });
+
+  ipcMain.handle('system:getHardwareProfile', async () => {
+    return await getHardwareProfile();
   });
 
   ipcMain.handle('system:getActiveEncoder', () => {
@@ -129,11 +137,14 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle('system:getPerformanceStats', async () => {
-    const cpu = process.getCPUUsage();
-    const mem = process.memoryUsage();
+    // Sum every Electron process (renderer, GPU, utility...), not just main, and express it as a
+    // share of the whole machine so the number matches Task Manager.
+    const metrics = app.getAppMetrics();
+    const cpuSum = metrics.reduce((acc, m) => acc + (m.cpu?.percentCPUUsage || 0), 0);
+    const memKb = metrics.reduce((acc, m) => acc + (m.memory?.workingSetSize || 0), 0);
     return {
-      cpuPercent: Math.round(cpu.percentCPUUsage),
-      processMemoryMb: Math.round(mem.rss / (1024 * 1024)),
+      cpuPercent: Math.min(100, Math.round(cpuSum / Math.max(1, os.cpus().length))),
+      processMemoryMb: Math.round(memKb / 1024),
       activeEncoder: EncoderDetector.getActiveEncoder().name,
       hardwareAcceleration: EncoderDetector.getActiveEncoder().type === 'hardware',
     };
@@ -187,6 +198,46 @@ export function registerIpcHandlers(
       console.warn('Failed to get disk space:', e);
     }
     return { freeBytes: 100 * 1024 * 1024 * 1024, totalBytes: 500 * 1024 * 1024 * 1024 };
+  });
+
+  // --- Branding (admin PIN protected intro/outro) ---
+  const kindOf = (k: string): BrandClipKind => {
+    if (k !== 'intro' && k !== 'outro') throw new Error('Unknown clip type');
+    return k;
+  };
+
+  ipcMain.handle('branding:getInfo', () => brandingStore.getInfo());
+
+  ipcMain.handle('branding:verifyPin', (_, pin: string) => {
+    brandingStore.assertPin(pin);
+    return true;
+  });
+
+  ipcMain.handle('branding:setPin', (_, currentPin: string | null, nextPin: string) => {
+    return brandingStore.setPin(currentPin, nextPin);
+  });
+
+  ipcMain.handle('branding:chooseClip', async (_, kind: string, pin: string) => {
+    const clipKind = kindOf(kind);
+    brandingStore.assertPin(pin); // check before showing the file dialog
+    const win = getMainWindow();
+    const options = {
+      title: `Choose lecture ${clipKind} video`,
+      properties: ['openFile' as const],
+      filters: [{ name: 'Videos', extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'] }],
+    };
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) return brandingStore.getInfo();
+    return await brandingStore.importClip(clipKind, result.filePaths[0], pin);
+  });
+
+  ipcMain.handle('branding:removeClip', (_, kind: string, pin: string) => {
+    return brandingStore.removeClip(kindOf(kind), pin);
+  });
+
+  ipcMain.handle('branding:readClip', (_, kind: string) => {
+    const buf = brandingStore.readClip(kindOf(kind));
+    return buf ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : null;
   });
 
   // --- OBS WebSocket ---

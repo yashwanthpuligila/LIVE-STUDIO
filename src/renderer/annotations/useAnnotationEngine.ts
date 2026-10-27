@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { AnnotationElement, AnnotationPoint, AnnotationTool } from '../../shared/types';
 
 export function useAnnotationEngine(canvasWidth = 1920, canvasHeight = 1080) {
@@ -17,21 +17,18 @@ export function useAnnotationEngine(canvasWidth = 1920, canvasHeight = 1080) {
   const laserRef = useRef<{ x: number; y: number; time: number }[]>([]);
   const isLaserActiveRef = useRef<boolean>(false);
 
-  // Offscreen canvas where all permanent elements are drawn
-  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  // Initialize offscreen canvas
-  useEffect(() => {
+  // Offscreen canvas where all permanent elements are drawn. Created synchronously so consumers
+  // receive a real canvas on the first render instead of null.
+  const offscreenCanvas = useMemo(() => {
     const cvs = document.createElement('canvas');
     cvs.width = canvasWidth;
     cvs.height = canvasHeight;
-    offscreenCanvasRef.current = cvs;
+    return cvs;
   }, [canvasWidth, canvasHeight]);
 
   // Redraw the entire annotation layer to offscreen canvas
   const redrawOffscreenCanvas = useCallback(() => {
-    const cvs = offscreenCanvasRef.current;
-    if (!cvs) return;
+    const cvs = offscreenCanvas;
     const ctx = cvs.getContext('2d');
     if (!ctx) return;
 
@@ -131,7 +128,7 @@ export function useAnnotationEngine(canvasWidth = 1920, canvasHeight = 1080) {
       }
       ctx.restore();
     }
-  }, [elements]);
+  }, [elements, offscreenCanvas]);
 
   // Trigger redraw whenever elements change
   useEffect(() => {
@@ -200,7 +197,7 @@ export function useAnnotationEngine(canvasWidth = 1920, canvasHeight = 1080) {
     canUndo: history.length > 0,
     canRedo: redoStack.length > 0,
     clearAll,
-    offscreenCanvas: offscreenCanvasRef.current,
+    offscreenCanvas,
     updateLaser,
     getActiveLaserPoints,
   };

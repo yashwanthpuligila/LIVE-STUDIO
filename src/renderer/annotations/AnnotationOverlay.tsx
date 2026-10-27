@@ -32,6 +32,8 @@ export const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   const activeCanvasRef = useRef<HTMLCanvasElement>(null);
   const isDrawingRef = useRef(false);
   const currentPointsRef = useRef<AnnotationPoint[]>([]);
+  // Pointer events can arrive far faster than the display refreshes; coalesce previews to one per frame
+  const previewRafRef = useRef<number | null>(null);
 
   // Text input state
   const [textInput, setTextInput] = useState<{
@@ -69,13 +71,16 @@ export const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   useEffect(() => {
     let animId: number;
 
+    let hadPoints = true;
     const renderLaser = () => {
       const cvs = activeCanvasRef.current;
-      if (cvs && activeTool === 'laser') {
+      const points = getActiveLaserPoints();
+      // Nothing drawn last frame and nothing to draw now: skip clearing a full-res canvas
+      if (cvs && activeTool === 'laser' && (points.length > 0 || hadPoints)) {
+        hadPoints = points.length > 0;
         const ctx = cvs.getContext('2d');
         if (ctx) {
           ctx.clearRect(0, 0, cvs.width, cvs.height);
-          const points = getActiveLaserPoints();
           const now = Date.now();
 
           for (const pt of points) {
@@ -168,7 +173,17 @@ export const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
       }
     }
 
-    // Render active drawing stroke preview
+    if (previewRafRef.current === null) {
+      previewRafRef.current = requestAnimationFrame(() => {
+        previewRafRef.current = null;
+        if (isDrawingRef.current) renderStrokePreview();
+      });
+    }
+  };
+
+  // Render active drawing stroke preview
+  const renderStrokePreview = () => {
+    const pts = currentPointsRef.current;
     const cvs = activeCanvasRef.current;
     if (!cvs) return;
     const ctx = cvs.getContext('2d');
@@ -239,6 +254,10 @@ export const AnnotationOverlay: React.FC<AnnotationOverlayProps> = ({
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
+    if (previewRafRef.current !== null) {
+      cancelAnimationFrame(previewRafRef.current);
+      previewRafRef.current = null;
+    }
 
     if (activeTool === 'laser') {
       updateLaser(0, 0, false);

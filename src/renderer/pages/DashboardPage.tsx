@@ -16,6 +16,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { AppSettings, DiskSpaceInfo, RecordingItem, Scene } from '../../shared/types';
+import { BrandMark } from '../components/BrandMark';
 
 interface DashboardPageProps {
   onOpenStudio: () => void;
@@ -69,17 +70,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     <div className="flex flex-col h-screen w-screen bg-[#0c0d10] text-gray-100 overflow-y-auto select-none">
       {/* Top Header */}
       <header className="h-16 bg-[#12141b] border-b border-[#202534] flex items-center justify-between px-8 z-10 sticky top-0 backdrop-blur-md">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/25">
-            <Video className="w-4 h-4 text-white" />
-          </div>
-          <div>
-            <span className="font-bold text-base tracking-tight text-white">Live Studio</span>
-            <span className="ml-2 text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">
-              Pro Edition
-            </span>
-          </div>
-        </div>
+        <BrandMark size="md" />
 
         <div className="flex items-center gap-3">
           <button

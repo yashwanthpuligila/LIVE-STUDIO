@@ -5,7 +5,9 @@ node_modules/
 dist/
 release/
 out/
-build/
+build/*
+!build/icon.ico
+!build/icon.png
 
 # Temporary / scratch scripts
 scratch/
