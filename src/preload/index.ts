@@ -1,10 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import {
   AppSettings,
+  BrandClipKind,
+  BrandingInfo,
   DesktopSource,
   DiskSpaceInfo,
   EncoderCapability,
+  HardwareProfile,
   RecordingItem,
+  RecordingStartOptions,
   RecordingStatus,
   Scene,
   StreamConfig,
@@ -20,7 +24,7 @@ const api = {
   },
 
   recording: {
-    start: (options: { outputDir?: string; resolution?: string; fps?: number }): Promise<{ id: string; filename: string }> =>
+    start: (options: RecordingStartOptions): Promise<{ id: string; filename: string }> =>
       ipcRenderer.invoke('recording:start', options),
     sendChunk: (chunk: ArrayBuffer) => {
       ipcRenderer.send('recording:chunk', chunk);
@@ -78,6 +82,7 @@ const api = {
     getDiskSpace: (path?: string): Promise<DiskSpaceInfo> =>
       ipcRenderer.invoke('system:getDiskSpace', path),
     getEncoders: (): Promise<EncoderCapability[]> => ipcRenderer.invoke('system:getEncoders'),
+    getHardwareProfile: (): Promise<HardwareProfile> => ipcRenderer.invoke('system:getHardwareProfile'),
     getActiveEncoder: (): Promise<EncoderCapability> => ipcRenderer.invoke('system:getActiveEncoder'),
     setActiveEncoder: (id: string): Promise<boolean> => ipcRenderer.invoke('system:setActiveEncoder', id),
     getPerformanceStats: (): Promise<{
@@ -88,6 +93,18 @@ const api = {
     }> => ipcRenderer.invoke('system:getPerformanceStats'),
     minimizeWindow: (): Promise<boolean> => ipcRenderer.invoke('system:minimizeWindow'),
     restoreWindow: (): Promise<boolean> => ipcRenderer.invoke('system:restoreWindow'),
+  },
+
+  branding: {
+    getInfo: (): Promise<BrandingInfo> => ipcRenderer.invoke('branding:getInfo'),
+    verifyPin: (pin: string): Promise<boolean> => ipcRenderer.invoke('branding:verifyPin', pin),
+    setPin: (currentPin: string | null, nextPin: string): Promise<BrandingInfo> =>
+      ipcRenderer.invoke('branding:setPin', currentPin, nextPin),
+    chooseClip: (kind: BrandClipKind, pin: string): Promise<BrandingInfo> =>
+      ipcRenderer.invoke('branding:chooseClip', kind, pin),
+    removeClip: (kind: BrandClipKind, pin: string): Promise<BrandingInfo> =>
+      ipcRenderer.invoke('branding:removeClip', kind, pin),
+    readClip: (kind: BrandClipKind): Promise<ArrayBuffer | null> => ipcRenderer.invoke('branding:readClip', kind),
   },
 
   obs: {

@@ -1,6 +1,8 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { BrowserWindow } from 'electron';
 import { getFFmpegPath } from '../utils/ffmpegHelper';
+import { EncoderDetector, buildEncoderArgs } from '../recording/encoderDetector';
+import { getHardwareProfile } from '../system/hardwareProfile';
 import { StreamConfig, StreamStats, StreamStatus } from '../../shared/types';
 import OBSWebSocket from 'obs-websocket-js';
 
@@ -19,6 +21,12 @@ export class StreamingManager {
   private getMainWindow: () => BrowserWindow | null;
   private obsClient: OBSWebSocket | null = null;
   private isObsConnected: boolean = false;
+
+  // Chunks received before the stream is confirmed live, replayed if we must restart FFmpeg
+  // with a fallback encoder (the first chunk carries the WebM/MKV header, so it can't be skipped).
+  private startupChunks: Buffer[] = [];
+  private startupBytes = 0;
+  private static readonly STARTUP_BUFFER_LIMIT = 16 * 1024 * 1024;
 
   constructor(getMainWindow: () => BrowserWindow | null) {
     this.getMainWindow = getMainWindow;
@@ -43,40 +51,6 @@ export class StreamingManager {
     this.status = 'connecting';
     this.notifyStatusChange();
 
-    const ffmpegPath = getFFmpegPath();
-    const videoBitrate = config.videoBitrate || 4500;
-    const audioBitrate = config.audioBitrate || 160;
-
-    // FFmpeg args for YouTube Live RTMPS output
-    const args = [
-      '-y',
-      '-re',
-      '-f', 'webm',
-      '-i', 'pipe:0',
-      '-c:v', 'libx264',
-      '-preset', 'veryfast',
-      '-tune', 'zerolatency',
-      '-b:v', `${videoBitrate}k`,
-      '-maxrate', `${videoBitrate}k`,
-      '-bufsize', `${videoBitrate * 2}k`,
-      '-pix_fmt', 'yuv420p',
-      '-g', `${(config.fps || 60) * 2}`, // 2 second GOP for YouTube Live
-      '-keyint_min', `${config.fps || 60}`,
-      '-c:a', 'aac',
-      '-b:a', `${audioBitrate}k`,
-      '-ar', '44100',
-      '-f', 'flv',
-      fullTargetUrl,
-    ];
-
-    try {
-      this.ffmpegProcess = spawn(ffmpegPath, args, { windowsHide: true });
-    } catch (err: any) {
-      this.status = 'error';
-      this.notifyStatusChange(`Failed to spawn FFmpeg: ${err.message}`);
-      throw err;
-    }
-
     this.startTime = Date.now();
     this.stats = {
       fps: 0,
@@ -85,16 +59,73 @@ export class StreamingManager {
       droppedFrames: 0,
       uptimeSec: 0,
     };
+    this.startupChunks = [];
+    this.startupBytes = 0;
+
+    await EncoderDetector.detectEncoders().catch(() => undefined);
+    const encoder = EncoderDetector.getActiveEncoder();
+    const lowEnd = (await getHardwareProfile()).tier === 'low';
+
+    try {
+      this.spawnFfmpeg(config, fullTargetUrl, encoder.isAvailable ? encoder.codec : 'libx264', lowEnd);
+    } catch (err: any) {
+      this.status = 'error';
+      this.notifyStatusChange(`Failed to spawn FFmpeg: ${err.message}`);
+      throw err;
+    }
+
+    // Start stats interval
+    this.statsTimer = setInterval(() => {
+      if (this.status === 'live') {
+        this.stats.uptimeSec = Math.floor((Date.now() - this.startTime) / 1000);
+        this.emitStats();
+      }
+    }, 1000);
+  }
+
+  private spawnFfmpeg(config: StreamConfig, targetUrl: string, codec: string, lowEnd: boolean) {
+    const fps = config.fps || 30;
+    const args = [
+      '-hide_banner',
+      // Live pipe input: no -re (it throttles reading and adds latency/buffer growth)
+      '-fflags', '+genpts',
+      '-f', 'matroska',
+      '-i', 'pipe:0',
+      ...buildEncoderArgs(codec, {
+        bitrateKbps: config.videoBitrate || 4500,
+        fps,
+        mode: 'stream',
+        lowEnd,
+      }),
+      // Composition only emits frames when the picture changes; YouTube needs constant frame rate
+      '-fps_mode', 'cfr',
+      '-r', `${fps}`,
+      '-c:a', 'aac',
+      '-b:a', `${config.audioBitrate || 160}k`,
+      '-ar', '44100',
+      '-f', 'flv',
+      targetUrl,
+    ];
+
+    console.log(`[Streaming] Starting FFmpeg with ${codec}`);
+    const proc = spawn(getFFmpegPath(), args, { windowsHide: true });
+    this.ffmpegProcess = proc;
+
+    // EPIPE on stdin after FFmpeg exits would otherwise be an unhandled 'error' event and crash the main process
+    proc.stdin.on('error', (err) => console.warn('[Streaming] FFmpeg stdin closed:', err.message));
 
     // Stderr parsing for YouTube connection and live statistics
-    this.ffmpegProcess.stderr.on('data', (data: Buffer) => {
+    proc.stderr.on('data', (data: Buffer) => {
+      if (proc !== this.ffmpegProcess) return;
       const line = data.toString();
-      
+
       // Parse FFmpeg progress line:
       // frame=  120 fps= 60 q=24.0 size=    1240kB time=00:00:02.00 bitrate=5080.0kbits/s speed=1.0x
       if (line.includes('fps=') || line.includes('bitrate=')) {
         if (this.status === 'connecting') {
           this.status = 'live';
+          this.startupChunks = [];
+          this.startupBytes = 0;
           this.notifyStatusChange();
         }
 
@@ -108,19 +139,35 @@ export class StreamingManager {
       }
 
       // Check for connection / error messages
-      if (line.toLowerCase().includes('connection refused') ||
-          line.toLowerCase().includes('failed to connect') ||
-          line.toLowerCase().includes('handshake failed') ||
-          line.toLowerCase().includes('server error') ||
-          line.toLowerCase().includes('authentication failed')) {
+      const lower = line.toLowerCase();
+      if (lower.includes('connection refused') ||
+          lower.includes('failed to connect') ||
+          lower.includes('handshake failed') ||
+          lower.includes('server error') ||
+          lower.includes('authentication failed')) {
         console.error('FFmpeg streaming error:', line);
         this.status = 'error';
         this.notifyStatusChange('Connection to YouTube Live failed. Please verify your stream key and network.');
       }
     });
 
-    this.ffmpegProcess.on('close', (code) => {
+    proc.on('close', (code) => {
+      if (proc !== this.ffmpegProcess) return;
       console.log(`FFmpeg stream process exited with code ${code}`);
+
+      // Hardware encoder failed before going live: retry once on the CPU encoder
+      if (this.status === 'connecting' && code !== 0 && codec !== 'libx264' && this.startupChunks.length > 0) {
+        console.warn(`[Streaming] ${codec} failed during startup, retrying with libx264`);
+        const replay = this.startupChunks;
+        try {
+          this.spawnFfmpeg(config, targetUrl, 'libx264', lowEnd);
+          for (const c of replay) this.ffmpegProcess?.stdin.write(c);
+          return;
+        } catch (e) {
+          console.error('[Streaming] Fallback spawn failed:', e);
+        }
+      }
+
       if (this.status === 'live' || this.status === 'connecting') {
         this.status = code === 0 ? 'idle' : 'error';
         this.notifyStatusChange(code !== 0 ? `Stream interrupted (exit code ${code})` : undefined);
@@ -128,23 +175,20 @@ export class StreamingManager {
       this.cleanup();
     });
 
-    this.ffmpegProcess.on('error', (err) => {
+    proc.on('error', (err) => {
+      if (proc !== this.ffmpegProcess) return;
       console.error('FFmpeg process error:', err);
       this.status = 'error';
       this.notifyStatusChange(`Stream error: ${err.message}`);
       this.cleanup();
     });
-
-    // Start stats interval
-    this.statsTimer = setInterval(() => {
-      if (this.status === 'live') {
-        this.stats.uptimeSec = Math.floor((Date.now() - this.startTime) / 1000);
-        this.emitStats();
-      }
-    }, 1000);
   }
 
   public writeChunk(chunk: Buffer) {
+    if (this.status === 'connecting' && this.startupBytes < StreamingManager.STARTUP_BUFFER_LIMIT) {
+      this.startupChunks.push(chunk);
+      this.startupBytes += chunk.length;
+    }
     if (this.ffmpegProcess && this.ffmpegProcess.stdin && !this.ffmpegProcess.stdin.destroyed) {
       try {
         this.ffmpegProcess.stdin.write(chunk);
@@ -199,6 +243,8 @@ export class StreamingManager {
       this.statsTimer = null;
     }
     this.ffmpegProcess = null;
+    this.startupChunks = [];
+    this.startupBytes = 0;
   }
 
   private notifyStatusChange(errorMessage?: string) {

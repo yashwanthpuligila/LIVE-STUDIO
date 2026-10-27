@@ -19,7 +19,8 @@ import {
   Zap,
   Monitor,
 } from 'lucide-react';
-import { AppSettings, DiskSpaceInfo, EncoderCapability } from '../../shared/types';
+import { AppSettings, DiskSpaceInfo, EncoderCapability, HardwareProfile } from '../../shared/types';
+import { BrandingAdminPanel } from '../settings/BrandingAdminPanel';
 
 interface SettingsPageProps {
   onBackToStudio: () => void;
@@ -31,7 +32,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBackToStudio }) =>
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [diskSpace, setDiskSpace] = useState<DiskSpaceInfo | null>(null);
   const [availableEncoders, setAvailableEncoders] = useState<EncoderCapability[]>([]);
-  const [activeTab, setActiveTab] = useState<'video' | 'audio' | 'youtube' | 'shortcuts' | 'obs'>('video');
+  const [hardware, setHardware] = useState<HardwareProfile | null>(null);
+  const [activeTab, setActiveTab] = useState<'video' | 'audio' | 'youtube' | 'shortcuts' | 'obs' | 'branding'>('video');
 
   // Device lists
   const [audioDevices, setAudioDevices] = useState<{ deviceId: string; label: string }[]>([]);
@@ -42,6 +44,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBackToStudio }) =>
       window.electronAPI.settings.get().then((s) => setSettings(s));
       window.electronAPI.system.getDiskSpace().then((d) => setDiskSpace(d));
       window.electronAPI.system.getEncoders().then((encoders) => setAvailableEncoders(encoders || []));
+      window.electronAPI.system.getHardwareProfile().then(setHardware).catch(() => undefined);
     }
 
     navigator.mediaDevices.enumerateDevices().then((devices) => {
@@ -173,6 +176,18 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBackToStudio }) =>
             <HardDrive className="w-4 h-4" />
             <span>OBS WebSocket (Mode A)</span>
           </button>
+
+          <button
+            onClick={() => setActiveTab('branding')}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl font-medium text-left transition-colors ${
+              activeTab === 'branding'
+                ? 'bg-blue-600/20 text-blue-400 border border-blue-500/40'
+                : 'text-gray-400 hover:text-white hover:bg-[#181b24]'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>Branding (Admin)</span>
+          </button>
         </div>
 
         {/* Right Content Area */}
@@ -184,6 +199,37 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBackToStudio }) =>
                 <h3 className="text-sm font-semibold text-white">Video, Recording & Hardware Acceleration</h3>
                 <p className="text-gray-500">Configure recording profiles, video encoding hardware, and performance tuning.</p>
               </div>
+
+              {/* Detected hardware + one-click recommended settings */}
+              {hardware && (
+                <div className="bg-[#14161f] border border-[#242938] rounded-2xl p-5 flex items-start justify-between gap-4">
+                  <div className="flex flex-col gap-1.5 min-w-0">
+                    <div className="flex items-center gap-2 text-white font-semibold">
+                      <Cpu className="w-4 h-4 text-emerald-400" />
+                      <span>This PC</span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 capitalize">
+                        {hardware.tier} performance tier
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-gray-400 truncate" title={hardware.cpuModel}>
+                      {hardware.cpuModel} • {hardware.logicalCores} threads • {hardware.totalMemoryGb} GB RAM
+                    </p>
+                    <p className="text-[11px] text-gray-500 truncate" title={hardware.gpus.join(', ')}>
+                      {hardware.gpus.join(' + ') || 'GPU unknown'}
+                    </p>
+                    <p className="text-[11px] text-gray-400">
+                      Recommended: {hardware.recommended.height}p @ {hardware.recommended.fps} FPS • {hardware.recommended.videoBitrateKbps.toLocaleString()} kbps
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setSettings({ ...settings, ...hardware.recommended, recordingProfile: 'balanced' })}
+                    className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 font-medium transition-colors"
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>Use recommended</span>
+                  </button>
+                </div>
+              )}
 
               {/* Recording Profile Selector */}
               <div className="bg-[#14161f] border border-[#242938] rounded-2xl p-5 flex flex-col gap-4">
@@ -386,7 +432,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBackToStudio }) =>
                   <div>
                     <span className="font-semibold text-gray-200 text-xs">Auto-Minimize Studio on Recording Start</span>
                     <p className="text-gray-500 text-[11px] mt-0.5">
-                      Automatically minimizes the Live Studio window when screen recording starts to avoid recursive preview loop.
+                      Automatically minimizes the Lecture Studio window when screen recording starts to avoid recursive preview loop.
                     </p>
                   </div>
                   <input
@@ -403,7 +449,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBackToStudio }) =>
                     <label className="text-gray-300 font-medium">Recording Save Directory</label>
                     {diskSpace && (
                       <span className="text-[11px] text-gray-500">
-                        Free Space: <span className="text-gray-300 font-mono">{diskSpace.freeGb.toFixed(1)} GB</span>
+                        Free Space: <span className="text-gray-300 font-mono">{(diskSpace.freeBytes / 1024 ** 3).toFixed(1)} GB</span>
                       </span>
                     )}
                   </div>
@@ -552,6 +598,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBackToStudio }) =>
           )}
 
           {/* TAB 5: OBS WebSocket */}
+          {activeTab === 'branding' && <BrandingAdminPanel />}
+
           {activeTab === 'obs' && (
             <div className="flex flex-col gap-6">
               <div>
