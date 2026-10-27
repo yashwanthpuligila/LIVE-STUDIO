@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-main: #0c0d10;
+    --bg-surface: #14161d;
+    --bg-panel: #181b24;
+    --bg-card: #1f232f;
+    --border-subtle: #292d3b;
+    --border-accent: #3a4054;
+    --accent-red: #ef4444;
+    --accent-red-glow: rgba(239, 68, 68, 0.35);
+    --accent-green: #22c55e;
+    --accent-blue: #3b82f6;
+    --accent-purple: #8b5cf6;
+  }
+
+  * {
+    border-color: var(--border-subtle);
+  }
+
+  body {
+    background-color: var(--bg-main);
+    color: #e5e7eb;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+/* Custom scrollbar for desktop app feel */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #12141a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2b3040;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3e455c;
+}
+
+/* Monospace font utility for timecodes and numbers */
+.font-mono-numbers {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Studio Pulse Animations */
+@keyframes pulse-live {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.04);
+    box-shadow: 0 0 12px 4px rgba(239, 68, 68, 0.4);
+  }
+}
+
+.animate-recording {
+  animation: pulse-live 1.6s infinite ease-in-out;
+}
+
+@keyframes pulse-stream {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  }
+  50% {
+    opacity: 0.9;
+    box-shadow: 0 0 12px 3px rgba(34, 197, 94, 0.4);
+  }
+}
+
+.animate-streaming {
+  animation: pulse-stream 2s infinite ease-in-out;
+}
