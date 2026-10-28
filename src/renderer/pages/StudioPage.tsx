@@ -18,6 +18,7 @@ import {
   Activity,
   Zap,
   CheckCircle,
+  PenTool,
 } from 'lucide-react';
 import {
   AppSettings,
@@ -39,15 +40,19 @@ import { createRecorder, pipeRecorderChunks } from '../studio/engine/recorderUti
 import { useAnnotationEngine } from '../annotations/useAnnotationEngine';
 import { AnnotationToolbar } from '../annotations/AnnotationToolbar';
 import { AnnotationOverlay } from '../annotations/AnnotationOverlay';
+import { useAnnotationShortcuts } from '../annotations/useAnnotationShortcuts';
 import { useAudioMixer } from '../studio/audio/useAudioMixer';
 import { AudioMixerPanel } from '../studio/audio/AudioMixerPanel';
 import { SceneListPanel } from '../scenes/SceneListPanel';
 import { SourceListPanel } from '../scenes/SourceListPanel';
 import { PropertiesPanel } from '../studio/PropertiesPanel';
 import { SourcePickerModal } from '../studio/SourcePickerModal';
+import { SourceTransformLayer } from '../studio/SourceTransformLayer';
+import { loadBackgroundImage } from '../studio/engine/backgroundEffects';
 import { YouTubeLiveModal } from '../studio/YouTubeLiveModal';
 import { PerformancePanel } from '../studio/PerformancePanel';
 import { LectureInfoPanel } from '../studio/LectureInfoPanel';
+import { CameraPanel } from '../studio/CameraPanel';
 import { BrandMark } from '../components/BrandMark';
 import klhLogoUrl from '../assets/klh-logo.png';
 
@@ -111,7 +116,6 @@ export const StudioPage: React.FC<StudioPageProps> = ({
     strokeWidth,
     setStrokeWidth,
     opacity,
-    setOpacity,
     isAnnotationEnabled,
     setIsAnnotationEnabled,
     elements,
@@ -121,10 +125,24 @@ export const StudioPage: React.FC<StudioPageProps> = ({
     canUndo,
     canRedo,
     clearAll,
+    beginErase,
+    eraseElements,
+    endErase,
     offscreenCanvas,
     updateLaser,
     getActiveLaserPoints,
   } = useAnnotationEngine(1920, 1080);
+
+  // Tool keys (P, H, E...) and Ctrl+Z / Ctrl+Y for the preview drawing layer
+  useAnnotationShortcuts({
+    onTool: (tool) => {
+      setActiveTool(tool);
+      if (tool !== 'select') setIsAnnotationEnabled(true);
+    },
+    onUndo: undo,
+    onRedo: redo,
+    onEscape: () => setActiveTool('select'),
+  });
 
   // --- Recording State ---
   const [recordingStatus, setRecordingStatus] = useState<RecordingStatus>('idle');
@@ -156,8 +174,28 @@ export const StudioPage: React.FC<StudioPageProps> = ({
   // Intro/outro currently playing into the recording; record controls are locked meanwhile
   const [clipPhase, setClipPhase] = useState<BrandClipKind | null>(null);
 
+  // Mirror recording state to the floating toolbar, and accept its start/pause/resume/stop buttons
+  useEffect(() => {
+    window.electronAPI?.overlay.sendRecordingState({
+      status: recordingStatus,
+      durationSec: recordingDuration,
+      locked: clipPhase !== null,
+    });
+  }, [recordingStatus, recordingDuration, clipPhase]);
+
+  const recordingHandlersRef = useRef<Record<string, () => void>>({});
+  useEffect(() => {
+    return window.electronAPI?.overlay.onRecordingCommand((cmd) => recordingHandlersRef.current[cmd]?.());
+  }, []);
+
+
   // Notice shown when the studio auto-adjusts quality to keep this machine smooth
   const [perfNotice, setPerfNotice] = useState<string | null>(null);
+
+  // Draw-on-screen overlay (ink layer + floating toolbar) over the shared display
+  const [overlayVisible, setOverlayVisible] = useState(false);
+  const [captureIsDisplay, setCaptureIsDisplay] = useState(false);
+  const captureDisplayRef = useRef<{ isDisplay: boolean; displayId?: string }>({ isDisplay: false });
   const lowFpsStreakRef = useRef(0);
   const busyRef = useRef(false);
   busyRef.current = recordingStatus !== 'idle' || streamStatus !== 'idle';
@@ -350,6 +388,23 @@ export const StudioPage: React.FC<StudioPageProps> = ({
     }
   }, [activeScene]);
 
+  // Webcam background blur / replacement
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine || !activeScene) return;
+    let cancelled = false;
+    for (const s of activeScene.sources) {
+      if (s.type !== 'webcam') continue;
+      const bg = s.background;
+      if (!bg || bg.mode === 'none') engine.setSourceBackground(s.id, null);
+      else if (bg.mode === 'blur') engine.setSourceBackground(s.id, bg);
+      else loadBackgroundImage(bg.image).then((img) => !cancelled && engine.setSourceBackground(s.id, bg, img));
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [activeScene]);
+
   // Connect webcam streams for the active scene. Previously every scene edit (e.g. dragging an
   // opacity slider) re-opened every camera and leaked the old streams; now a camera is opened once
   // per source+device and released when it is hidden, removed, or its scene is switched away.
@@ -462,7 +517,29 @@ export const StudioPage: React.FC<StudioPageProps> = ({
   }, [perfNotice]);
 
   // ATTACH REAL DESKTOP MONITOR OR WINDOW STREAM (Phase 2 & Phase 3 Core Fix!)
-  const handleSelectDesktopSource = async (source: DesktopSource) => {
+  useEffect(() => {
+    const api = window.electronAPI?.overlay;
+    if (!api) return;
+    api.isVisible().then(setOverlayVisible);
+    const unsub = api.onVisibilityChanged(setOverlayVisible);
+    return () => {
+      unsub();
+      api.hide();
+    };
+  }, []);
+
+  const showScreenOverlay = () => {
+    const capture = captureDisplayRef.current;
+    if (capture.isDisplay) window.electronAPI?.overlay.show(capture.displayId);
+  };
+
+  const toggleScreenOverlay = () => {
+    if (overlayVisible) window.electronAPI?.overlay.hide();
+    else showScreenOverlay();
+  };
+
+  // fromPicker: the user chose this source, so bring up the on-screen drawing tools with it
+  const handleSelectDesktopSource = async (source: DesktopSource, fromPicker = false) => {
     if (!engineRef.current) return;
 
     try {
@@ -581,6 +658,20 @@ export const StudioPage: React.FC<StudioPageProps> = ({
         setScenes(updatedScenes);
         window.electronAPI?.scenes.save(updatedScenes);
       }
+
+      // Screen drawing only works on whole displays: a window capture records just that window,
+      // never the ink layer floating above it
+      const isDisplay = !!(source.isDisplay || source.id.startsWith('screen:'));
+      captureDisplayRef.current = { isDisplay, displayId: source.display_id };
+      setCaptureIsDisplay(isDisplay);
+      if (window.electronAPI) {
+        if (!isDisplay) {
+          window.electronAPI.overlay.hide();
+          if (fromPicker) setPerfNotice('Drawing on screen needs an entire screen source. For a single window, draw on the preview.');
+        } else if (fromPicker || (await window.electronAPI.overlay.isVisible())) {
+          window.electronAPI.overlay.show(source.display_id);
+        }
+      }
     } catch (err: any) {
       console.error('[Screen Capture] Selection error:', err);
       alert(`Could not capture selected source: ${err.message}`);
@@ -627,6 +718,9 @@ export const StudioPage: React.FC<StudioPageProps> = ({
           setClipPhase(null);
         }
       }
+
+      // Recording a whole screen: make the on-screen drawing tools available
+      showScreenOverlay();
 
       // If user enabled minimize on record to prevent infinity mirror / studio obstruction:
       if (settings?.minimizeOnRecord) {
@@ -704,6 +798,18 @@ export const StudioPage: React.FC<StudioPageProps> = ({
     }
   };
 
+  // Buttons on the floating screen toolbar call the same handlers as the studio controls
+  recordingHandlersRef.current = {
+    start: () => {
+      if (recordingStatus === 'idle' && !clipPhase) handleStartRecording();
+    },
+    pause: handlePauseRecording,
+    resume: handleResumeRecording,
+    stop: () => {
+      if (recordingStatus === 'recording' || recordingStatus === 'paused') handleStopRecording();
+    },
+  };
+
   // --- YouTube Live Streaming Actions ---
   const handleStartStream = async (config: StreamConfig) => {
     if (!engineRef.current || !window.electronAPI) return;
@@ -719,6 +825,7 @@ export const StudioPage: React.FC<StudioPageProps> = ({
 
       stopStreamRecorderRef.current = pipeRecorderChunks(strRec, (buf) => window.electronAPI.streaming.sendChunk(buf));
       strRec.start(500); // 500ms low-latency chunks
+      showScreenOverlay();
       streamRecorderRef.current = strRec;
       setStreamStatus('connecting');
     } catch (err: any) {
@@ -851,12 +958,16 @@ export const StudioPage: React.FC<StudioPageProps> = ({
     window.electronAPI?.scenes.save(updated);
   };
 
-  const handleUpdateSource = (id: string, updates: Partial<SceneSource>) => {
-    if (!activeScene) return;
-    const updatedSources = activeScene.sources.map((s) => (s.id === id ? { ...s, ...updates } : s));
-    const updated = scenes.map((s) => (s.id === activeScene.id ? { ...s, sources: updatedSources } : s));
+  // persist=false while dragging a webcam on the preview; saved once on release
+  const handleUpdateSource = (id: string, updates: Partial<SceneSource>, persist = true) => {
+    const current = scenesRef.current;
+    const scene = current.find((s) => s.id === activeSceneIdRef.current);
+    if (!scene) return;
+    const updatedSources = scene.sources.map((s) => (s.id === id ? { ...s, ...updates } : s));
+    const updated = current.map((s) => (s.id === scene.id ? { ...s, sources: updatedSources } : s));
+    scenesRef.current = updated;
     setScenes(updated);
-    window.electronAPI?.scenes.save(updated);
+    if (persist) window.electronAPI?.scenes.save(updated);
   };
 
   const handleToggleSourceVisibility = (id: string) => {
@@ -932,6 +1043,29 @@ export const StudioPage: React.FC<StudioPageProps> = ({
           >
             <Monitor className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
             <span className="truncate">{activeSourceName}</span>
+          </button>
+
+          {/* Draw directly on the shared screen (recorded and streamed) */}
+          <button
+            onClick={toggleScreenOverlay}
+            disabled={!captureIsDisplay}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition-colors text-xs font-medium ${
+              overlayVisible
+                ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/25'
+                : captureIsDisplay
+                  ? 'bg-[#1a1e2b] border-[#2b3142] text-gray-200 hover:bg-[#252b3d] hover:text-white'
+                  : 'bg-[#15171f] border-[#232837] text-gray-600 cursor-not-allowed'
+            }`}
+            title={
+              !captureIsDisplay
+                ? 'Select an entire screen as the source to draw on it'
+                : overlayVisible
+                  ? 'Close the on-screen drawing tools'
+                  : 'Show drawing tools on top of your screen'
+            }
+          >
+            <PenTool className="w-3.5 h-3.5" />
+            <span>{overlayVisible ? 'Screen drawing on' : 'Draw on screen'}</span>
           </button>
         </div>
 
@@ -1048,12 +1182,29 @@ export const StudioPage: React.FC<StudioPageProps> = ({
               opacity={opacity}
               isEnabled={isAnnotationEnabled}
               onAddElement={addElement}
+              onBeginErase={beginErase}
+              onErase={eraseElements}
+              onEndErase={endErase}
               updateLaser={updateLaser}
               getActiveLaserPoints={getActiveLaserPoints}
               elements={elements}
               canvasWidth={1920}
               canvasHeight={1080}
             />
+
+            {/* Move / resize the webcam directly on the preview */}
+            {activeScene && engineRef.current && (
+              <SourceTransformLayer
+                sources={activeScene.sources}
+                canvasWidth={engineRef.current.getDimensions().width}
+                canvasHeight={engineRef.current.getDimensions().height}
+                contentTop={engineRef.current.getContentTop()}
+                pointerMode={!isAnnotationEnabled || activeTool === 'select'}
+                selectedSourceId={selectedSourceId}
+                onSelect={setSelectedSourceId}
+                onChange={(id, updates, commit) => handleUpdateSource(id, updates, commit)}
+              />
+            )}
 
             {/* Floating Annotation Toolbar centered at the top of preview */}
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30">
@@ -1064,8 +1215,6 @@ export const StudioPage: React.FC<StudioPageProps> = ({
                 setColor={setColor}
                 strokeWidth={strokeWidth}
                 setStrokeWidth={setStrokeWidth}
-                opacity={opacity}
-                setOpacity={setOpacity}
                 undo={undo}
                 redo={redo}
                 canUndo={canUndo}
@@ -1111,6 +1260,16 @@ export const StudioPage: React.FC<StudioPageProps> = ({
         {showInspector && (
           <div className="w-72 bg-[#12141a] border-l border-[#202534] p-3 overflow-y-auto flex flex-col gap-3">
             <LectureInfoPanel info={lectureInfo} onChange={updateLectureInfo} branding={branding} />
+            <CameraPanel
+              camera={
+                (selectedSource?.type === 'webcam' ? selectedSource : null) ??
+                activeScene?.sources.find((s) => s.type === 'webcam') ??
+                null
+              }
+              videoDevices={videoDevices}
+              onUpdate={handleUpdateSource}
+              onAddCamera={handleAddWebcamSource}
+            />
             <PropertiesPanel
               source={selectedSource}
               onUpdateSource={handleUpdateSource}
@@ -1304,7 +1463,7 @@ export const StudioPage: React.FC<StudioPageProps> = ({
       <SourcePickerModal
         isOpen={isSourcePickerOpen}
         onClose={() => setIsSourcePickerOpen(false)}
-        onSelectSource={handleSelectDesktopSource}
+        onSelectSource={(source) => handleSelectDesktopSource(source, true)}
         selectedSourceId={activeScene?.sources[0]?.sourceId}
       />
 

@@ -1,8 +1,16 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { AnnotationElement, AnnotationPoint, AnnotationTool } from '../../shared/types';
+import { AnnotationElement, AnnotationTool } from '../../shared/types';
+import { drawElements, LASER_LIFETIME_MS, LaserPoint } from './annotationRenderer';
 
-export function useAnnotationEngine(canvasWidth = 1920, canvasHeight = 1080) {
-  const [activeTool, setActiveTool] = useState<AnnotationTool>('pen');
+interface AnnotationEngineOptions {
+  initialTool?: AnnotationTool;
+  /** Keep a full-size canvas with every committed element drawn on it (used by the studio compositor). */
+  offscreen?: boolean;
+}
+
+export function useAnnotationEngine(canvasWidth = 1920, canvasHeight = 1080, options: AnnotationEngineOptions = {}) {
+  const { initialTool = 'pen', offscreen = true } = options;
+  const [activeTool, setActiveTool] = useState<AnnotationTool>(initialTool);
   const [color, setColor] = useState<string>('#ef4444'); // Vibrant red default
   const [strokeWidth, setStrokeWidth] = useState<number>(6);
   const [opacity, setOpacity] = useState<number>(1.0);
@@ -13,127 +21,30 @@ export function useAnnotationEngine(canvasWidth = 1920, canvasHeight = 1080) {
   const [history, setHistory] = useState<AnnotationElement[][]>([]);
   const [redoStack, setRedoStack] = useState<AnnotationElement[][]>([]);
 
+  // Elements as they were when the current eraser drag began; becomes one undo step
+  const eraseSnapshotRef = useRef<AnnotationElement[] | null>(null);
+
   // Laser pointer state
-  const laserRef = useRef<{ x: number; y: number; time: number }[]>([]);
+  const laserRef = useRef<LaserPoint[]>([]);
   const isLaserActiveRef = useRef<boolean>(false);
 
   // Offscreen canvas where all permanent elements are drawn. Created synchronously so consumers
   // receive a real canvas on the first render instead of null.
   const offscreenCanvas = useMemo(() => {
+    if (!offscreen) return null;
     const cvs = document.createElement('canvas');
     cvs.width = canvasWidth;
     cvs.height = canvasHeight;
     return cvs;
-  }, [canvasWidth, canvasHeight]);
+  }, [canvasWidth, canvasHeight, offscreen]);
 
-  // Redraw the entire annotation layer to offscreen canvas
-  const redrawOffscreenCanvas = useCallback(() => {
-    const cvs = offscreenCanvas;
-    const ctx = cvs.getContext('2d');
-    if (!ctx) return;
-
-    ctx.clearRect(0, 0, cvs.width, cvs.height);
-
-    for (const el of elements) {
-      ctx.save();
-      ctx.globalAlpha = el.opacity;
-      ctx.strokeStyle = el.color;
-      ctx.fillStyle = el.color;
-      ctx.lineWidth = el.strokeWidth;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      if (el.tool === 'highlighter') {
-        ctx.globalAlpha = 0.35;
-        ctx.lineWidth = el.strokeWidth * 2.5;
-      }
-
-      if (el.tool === 'pen' || el.tool === 'highlighter') {
-        if (el.points.length > 1) {
-          ctx.beginPath();
-          ctx.moveTo(el.points[0].x, el.points[0].y);
-          for (let i = 1; i < el.points.length; i++) {
-            ctx.lineTo(el.points[i].x, el.points[i].y);
-          }
-          ctx.stroke();
-        } else if (el.points.length === 1) {
-          ctx.beginPath();
-          ctx.arc(el.points[0].x, el.points[0].y, el.strokeWidth / 2, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      } else if (el.tool === 'line') {
-        if (el.points.length >= 2) {
-          ctx.beginPath();
-          ctx.moveTo(el.points[0].x, el.points[0].y);
-          ctx.lineTo(el.points[1].x, el.points[1].y);
-          ctx.stroke();
-        }
-      } else if (el.tool === 'arrow') {
-        if (el.points.length >= 2) {
-          const p1 = el.points[0];
-          const p2 = el.points[1];
-          const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
-          const headLen = Math.max(16, el.strokeWidth * 3.5);
-
-          // Draw main shaft
-          ctx.beginPath();
-          ctx.moveTo(p1.x, p1.y);
-          ctx.lineTo(p2.x, p2.y);
-          ctx.stroke();
-
-          // Draw arrowhead
-          ctx.beginPath();
-          ctx.moveTo(p2.x, p2.y);
-          ctx.lineTo(
-            p2.x - headLen * Math.cos(angle - Math.PI / 6),
-            p2.y - headLen * Math.sin(angle - Math.PI / 6)
-          );
-          ctx.lineTo(
-            p2.x - headLen * Math.cos(angle + Math.PI / 6),
-            p2.y - headLen * Math.sin(angle + Math.PI / 6)
-          );
-          ctx.closePath();
-          ctx.fill();
-        }
-      } else if (el.tool === 'rect') {
-        if (el.points.length >= 2) {
-          const p1 = el.points[0];
-          const p2 = el.points[1];
-          const x = Math.min(p1.x, p2.x);
-          const y = Math.min(p1.y, p2.y);
-          const w = Math.abs(p2.x - p1.x);
-          const h = Math.abs(p2.y - p1.y);
-          ctx.strokeRect(x, y, w, h);
-        }
-      } else if (el.tool === 'circle') {
-        if (el.points.length >= 2) {
-          const p1 = el.points[0];
-          const p2 = el.points[1];
-          const rx = Math.abs(p2.x - p1.x) / 2;
-          const ry = Math.abs(p2.y - p1.y) / 2;
-          const cx = Math.min(p1.x, p2.x) + rx;
-          const cy = Math.min(p1.y, p2.y) + ry;
-          ctx.beginPath();
-          ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-      } else if (el.tool === 'text' && el.text) {
-        if (el.points.length > 0) {
-          const p = el.points[0];
-          ctx.font = `bold ${el.fontSize || 32}px Inter, sans-serif`;
-          ctx.shadowColor = 'rgba(0,0,0,0.8)';
-          ctx.shadowBlur = 6;
-          ctx.fillText(el.text, p.x, p.y);
-        }
-      }
-      ctx.restore();
-    }
-  }, [elements, offscreenCanvas]);
-
-  // Trigger redraw whenever elements change
+  // Redraw the entire annotation layer whenever elements change
   useEffect(() => {
-    redrawOffscreenCanvas();
-  }, [redrawOffscreenCanvas]);
+    const ctx = offscreenCanvas?.getContext('2d');
+    if (!offscreenCanvas || !ctx) return;
+    ctx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
+    drawElements(ctx, elements);
+  }, [elements, offscreenCanvas]);
 
   const addElement = useCallback((element: AnnotationElement) => {
     setHistory(prev => [...prev, elements]);
@@ -164,6 +75,24 @@ export function useAnnotationEngine(canvasWidth = 1920, canvasHeight = 1080) {
     setElements([]);
   }, [elements]);
 
+  // --- Eraser: removes whole elements; one drag = one undo step ---
+  const beginErase = useCallback(() => {
+    eraseSnapshotRef.current = elements;
+  }, [elements]);
+
+  const eraseElements = useCallback((ids: Set<string>) => {
+    if (ids.size === 0) return;
+    setElements(prev => prev.filter(el => !ids.has(el.id)));
+  }, []);
+
+  const endErase = useCallback((changed: boolean) => {
+    const snapshot = eraseSnapshotRef.current;
+    eraseSnapshotRef.current = null;
+    if (!changed || !snapshot) return;
+    setHistory(prev => [...prev, snapshot]);
+    setRedoStack([]);
+  }, []);
+
   // Laser pointer updater
   const updateLaser = useCallback((x: number, y: number, isActive: boolean) => {
     isLaserActiveRef.current = isActive;
@@ -172,10 +101,10 @@ export function useAnnotationEngine(canvasWidth = 1920, canvasHeight = 1080) {
     }
   }, []);
 
-  // Prune expired laser points (lifetime 500ms)
+  // Prune expired laser points
   const getActiveLaserPoints = useCallback(() => {
     const now = Date.now();
-    laserRef.current = laserRef.current.filter(p => now - p.time < 500);
+    laserRef.current = laserRef.current.filter(p => now - p.time < LASER_LIFETIME_MS);
     return laserRef.current;
   }, []);
 
@@ -197,6 +126,9 @@ export function useAnnotationEngine(canvasWidth = 1920, canvasHeight = 1080) {
     canUndo: history.length > 0,
     canRedo: redoStack.length > 0,
     clearAll,
+    beginErase,
+    eraseElements,
+    endErase,
     offscreenCanvas,
     updateLaser,
     getActiveLaserPoints,

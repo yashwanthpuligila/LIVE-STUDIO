@@ -9,6 +9,7 @@ import { ConfigStore } from '../storage/configStore';
 import { RecordingsStore } from '../storage/recordingsStore';
 import { ScenesStore } from '../storage/scenesStore';
 import { BrandingStore } from '../storage/brandingStore';
+import { BackgroundsStore } from '../storage/backgroundsStore';
 import { EncoderDetector } from '../recording/encoderDetector';
 import { getHardwareProfile } from '../system/hardwareProfile';
 import { AppSettings, BrandClipKind, DiskSpaceInfo, RecordingStartOptions, Scene, StreamConfig } from '../../shared/types';
@@ -239,6 +240,16 @@ export function registerIpcHandlers(
     const buf = brandingStore.readClip(kindOf(kind));
     return buf ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : null;
   });
+
+  // --- Webcam background images ---
+  const backgroundsStore = new BackgroundsStore();
+  ipcMain.handle('backgrounds:list', () => backgroundsStore.list());
+  ipcMain.handle('backgrounds:choose', () => backgroundsStore.choose(getMainWindow()));
+  ipcMain.handle('backgrounds:read', (_, name: string) => {
+    const buf = backgroundsStore.read(name);
+    return buf ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : null;
+  });
+  ipcMain.handle('backgrounds:remove', (_, name: string) => backgroundsStore.remove(name));
 
   // --- OBS WebSocket ---
   ipcMain.handle('obs:connect', async (_, url?: string, password?: string) => {

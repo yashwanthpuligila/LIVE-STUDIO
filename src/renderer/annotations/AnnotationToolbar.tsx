@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   PenTool,
   Highlighter,
@@ -12,13 +12,17 @@ import {
   Undo2,
   Redo2,
   Trash2,
-  MousePointer,
-  Sliders,
+  MousePointer2,
   Palette,
   Eye,
   EyeOff,
+  GripVertical,
+  ChevronUp,
+  AppWindow,
+  X,
 } from 'lucide-react';
 import { AnnotationTool } from '../../shared/types';
+import { TOOL_SHORTCUTS } from './useAnnotationShortcuts';
 
 interface AnnotationToolbarProps {
   activeTool: AnnotationTool;
@@ -27,27 +31,85 @@ interface AnnotationToolbarProps {
   setColor: (color: string) => void;
   strokeWidth: number;
   setStrokeWidth: (width: number) => void;
-  opacity: number;
-  setOpacity: (opacity: number) => void;
   undo: () => void;
   redo: () => void;
   canUndo: boolean;
   canRedo: boolean;
   clearAll: () => void;
-  isAnnotationEnabled: boolean;
-  setIsAnnotationEnabled: (enabled: boolean) => void;
+  /** Studio only: draw mode on/off for the preview */
+  isAnnotationEnabled?: boolean;
+  setIsAnnotationEnabled?: (enabled: boolean) => void;
+  /** 'floating' is the on-screen toolbar shown over the desktop while sharing a display */
+  variant?: 'studio' | 'floating';
+  onCollapse?: () => void;
+  onOpenStudio?: () => void;
+  onClose?: () => void;
+  /** Floating only: extra controls shown right after the drag handle (recording controls) */
+  leading?: React.ReactNode;
 }
 
-const PRESET_COLORS = [
+export const PRESET_COLORS = [
   '#ef4444', // Red
-  '#f59e0b', // Amber/Yellow
+  '#f59e0b', // Amber
+  '#facc15', // Yellow
   '#22c55e', // Green
   '#06b6d4', // Cyan
   '#3b82f6', // Blue
   '#a855f7', // Purple
+  '#ec4899', // Pink
   '#ffffff', // White
   '#111827', // Black
 ];
+
+type ToolDef = { id: AnnotationTool; label: string; icon: React.ReactNode };
+
+const ic = 'w-4 h-4';
+const TOOL_GROUPS: ToolDef[][] = [
+  [
+    { id: 'select', label: 'Pointer', icon: <MousePointer2 className={ic} /> },
+    { id: 'pen', label: 'Pen', icon: <PenTool className={ic} /> },
+    { id: 'highlighter', label: 'Highlighter', icon: <Highlighter className={ic} /> },
+    { id: 'eraser', label: 'Eraser', icon: <Eraser className={ic} /> },
+  ],
+  [
+    { id: 'arrow', label: 'Arrow', icon: <ArrowUpRight className={ic} /> },
+    { id: 'line', label: 'Line', icon: <Minus className={ic} /> },
+    { id: 'rect', label: 'Rectangle', icon: <Square className={ic} /> },
+    { id: 'circle', label: 'Ellipse', icon: <Circle className={ic} /> },
+    { id: 'text', label: 'Text', icon: <Type className={ic} /> },
+  ],
+  [{ id: 'laser', label: 'Laser pointer', icon: <Zap className={ic} /> }],
+];
+
+const Divider = () => <div className="w-px h-6 bg-white/10 shrink-0" />;
+
+const IconButton: React.FC<{
+  onClick: () => void;
+  title: string;
+  active?: boolean;
+  disabled?: boolean;
+  danger?: boolean;
+  children: React.ReactNode;
+}> = ({ onClick, title, active, disabled, danger, children }) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    title={title}
+    aria-label={title}
+    aria-pressed={active}
+    className={`relative w-8 h-8 shrink-0 flex items-center justify-center rounded-lg transition-colors ${
+      active
+        ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+        : disabled
+          ? 'text-gray-600 cursor-not-allowed'
+          : danger
+            ? 'text-red-400 hover:text-red-300 hover:bg-red-500/15'
+            : 'text-gray-300 hover:text-white hover:bg-white/10'
+    }`}
+  >
+    {children}
+  </button>
+);
 
 export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
   activeTool,
@@ -56,105 +118,149 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
   setColor,
   strokeWidth,
   setStrokeWidth,
-  opacity,
-  setOpacity,
   undo,
   redo,
   canUndo,
   canRedo,
   clearAll,
-  isAnnotationEnabled,
+  isAnnotationEnabled = true,
   setIsAnnotationEnabled,
+  variant = 'studio',
+  onCollapse,
+  onOpenStudio,
+  onClose,
+  leading,
 }) => {
-  const tools: { id: AnnotationTool; label: string; icon: React.ReactNode }[] = [
-    { id: 'select', label: 'Interact / Pass-through', icon: <MousePointer className="w-4 h-4" /> },
-    { id: 'pen', label: 'Pen', icon: <PenTool className="w-4 h-4" /> },
-    { id: 'highlighter', label: 'Highlighter', icon: <Highlighter className="w-4 h-4" /> },
-    { id: 'arrow', label: 'Arrow', icon: <ArrowUpRight className="w-4 h-4" /> },
-    { id: 'line', label: 'Line', icon: <Minus className="w-4 h-4" /> },
-    { id: 'rect', label: 'Rectangle', icon: <Square className="w-4 h-4" /> },
-    { id: 'circle', label: 'Circle', icon: <Circle className="w-4 h-4" /> },
-    { id: 'text', label: 'Text Note', icon: <Type className="w-4 h-4" /> },
-    { id: 'laser', label: 'Laser Pointer', icon: <Zap className="w-4 h-4" /> },
-  ];
+  const floating = variant === 'floating';
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const paletteRef = useRef<HTMLDivElement>(null);
+
+  // Close the colour popover on any click outside it
+  useEffect(() => {
+    if (!paletteOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (!paletteRef.current?.contains(e.target as Node)) setPaletteOpen(false);
+    };
+    window.addEventListener('pointerdown', onDown);
+    return () => window.removeEventListener('pointerdown', onDown);
+  }, [paletteOpen]);
+
+  const pickTool = (tool: AnnotationTool) => {
+    setActiveTool(tool);
+    if (setIsAnnotationEnabled && !isAnnotationEnabled && tool !== 'select') setIsAnnotationEnabled(true);
+  };
+
+  const drawing = isAnnotationEnabled && activeTool !== 'select';
+  const dot = Math.max(4, Math.min(18, strokeWidth));
 
   return (
-    <div className="bg-[#14161f]/95 backdrop-blur-md border border-[#2b3040] rounded-2xl px-3 py-2 flex items-center gap-3 shadow-2xl text-xs select-none">
-      {/* Enable / Disable Annotation Mode Toggle */}
-      <button
-        onClick={() => setIsAnnotationEnabled(!isAnnotationEnabled)}
-        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
-          isAnnotationEnabled
-            ? 'bg-blue-600/30 text-blue-400 border border-blue-500/50 hover:bg-blue-600/40'
-            : 'bg-gray-800/80 text-gray-400 hover:text-white border border-transparent'
-        }`}
-        title="Toggle Drawing Mode"
-      >
-        {isAnnotationEnabled ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-        <span className="hidden sm:inline">Draw Mode</span>
-      </button>
-
-      <div className="w-[1px] h-6 bg-[#2a2f40]" />
-
-      {/* Tools Group */}
-      <div className="flex items-center gap-1">
-        {tools.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => {
-              setActiveTool(t.id);
-              if (!isAnnotationEnabled && t.id !== 'select') {
-                setIsAnnotationEnabled(true);
-              }
-            }}
-            className={`p-2 rounded-lg transition-all ${
-              activeTool === t.id && isAnnotationEnabled
-                ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-[#202433]'
+    <div
+      className={`flex items-center gap-1.5 px-2 py-1.5 rounded-2xl text-xs select-none border shadow-2xl backdrop-blur-md ${
+        floating ? 'bg-[#11131a]/95 border-white/10' : 'bg-[#14161f]/95 border-[#2b3040]'
+      }`}
+    >
+      {floating ? (
+        <div
+          className="flex items-center gap-1.5 pl-0.5 pr-1 h-8 text-gray-500 cursor-grab [-webkit-app-region:drag]"
+          title="Drag to move"
+        >
+          <GripVertical className="w-4 h-4" />
+          <span
+            className={`px-1.5 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wider ${
+              drawing ? 'bg-emerald-500/20 text-emerald-300' : 'bg-white/5 text-gray-400'
             }`}
-            title={t.label}
           >
-            {t.icon}
-          </button>
-        ))}
-      </div>
-
-      <div className="w-[1px] h-6 bg-[#2a2f40]" />
-
-      {/* Color Palette */}
-      <div className="flex items-center gap-1.5">
-        {PRESET_COLORS.map((c) => (
-          <button
-            key={c}
-            onClick={() => setColor(c)}
-            className={`w-5 h-5 rounded-full border transition-transform ${
-              color.toLowerCase() === c.toLowerCase()
-                ? 'scale-125 border-white shadow-[0_0_8px_rgba(255,255,255,0.4)]'
-                : 'border-transparent hover:scale-110 opacity-80 hover:opacity-100'
-            }`}
-            style={{ backgroundColor: c }}
-            title={`Select Color: ${c}`}
-          />
-        ))}
-
-        {/* Custom Color Input */}
-        <div className="relative flex items-center justify-center w-5 h-5 rounded-full overflow-hidden border border-[#373e52] hover:border-white">
-          <input
-            type="color"
-            value={color}
-            onChange={(e) => setColor(e.target.value)}
-            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-            title="Custom Color"
-          />
-          <Palette className="w-3 h-3 text-gray-300 pointer-events-none" />
+            {drawing ? 'Drawing' : 'Mouse'}
+          </span>
         </div>
+      ) : (
+        setIsAnnotationEnabled && (
+          <button
+            onClick={() => setIsAnnotationEnabled(!isAnnotationEnabled)}
+            className={`flex items-center gap-1.5 h-8 px-2.5 rounded-lg font-medium transition-colors shrink-0 ${
+              isAnnotationEnabled
+                ? 'bg-blue-600/25 text-blue-300 border border-blue-500/50 hover:bg-blue-600/35'
+                : 'bg-white/5 text-gray-400 hover:text-white border border-transparent'
+            }`}
+            title={isAnnotationEnabled ? 'Hide drawing tools on the preview' : 'Draw on the preview'}
+          >
+            {isAnnotationEnabled ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+            <span className="hidden lg:inline">Draw</span>
+          </button>
+        )
+      )}
+
+      {floating && leading && (
+        <>
+          <Divider />
+          {leading}
+        </>
+      )}
+
+      {TOOL_GROUPS.map((group, gi) => (
+        <React.Fragment key={gi}>
+          <Divider />
+          <div className="flex items-center gap-0.5">
+            {group.map((t) => (
+              <IconButton
+                key={t.id}
+                onClick={() => pickTool(t.id)}
+                active={activeTool === t.id && (isAnnotationEnabled || t.id === 'select')}
+                title={`${t.label} (${TOOL_SHORTCUTS[t.id]})`}
+              >
+                {t.icon}
+              </IconButton>
+            ))}
+          </div>
+        </React.Fragment>
+      ))}
+
+      <Divider />
+
+      {/* Colour: current swatch opens the palette */}
+      <div className="relative" ref={paletteRef}>
+        <button
+          onClick={() => setPaletteOpen((o) => !o)}
+          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10"
+          title="Colour"
+          aria-label="Colour"
+        >
+          <span className="w-5 h-5 rounded-full border-2 border-white/80 shadow" style={{ backgroundColor: color }} />
+        </button>
+        {paletteOpen && (
+          <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 z-50 p-2 rounded-xl bg-[#11131a] border border-white/10 shadow-2xl grid grid-cols-5 gap-1.5 w-max">
+            {PRESET_COLORS.map((c) => (
+              <button
+                key={c}
+                onClick={() => {
+                  setColor(c);
+                  setPaletteOpen(false);
+                }}
+                className={`w-6 h-6 rounded-full border-2 transition-transform hover:scale-110 ${
+                  color.toLowerCase() === c ? 'border-white scale-110' : 'border-white/15'
+                }`}
+                style={{ backgroundColor: c }}
+                title={c}
+                aria-label={`Colour ${c}`}
+              />
+            ))}
+            <label
+              className="col-span-5 mt-1 flex items-center justify-center gap-1.5 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 cursor-pointer"
+              title="Custom colour"
+            >
+              <Palette className="w-3.5 h-3.5" />
+              <span>Custom</span>
+              <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="sr-only" />
+            </label>
+          </div>
+        )}
       </div>
 
-      <div className="w-[1px] h-6 bg-[#2a2f40]" />
-
-      {/* Stroke Width Slider */}
-      <div className="flex items-center gap-2" title="Brush Thickness">
-        <span className="text-[10px] text-gray-400 font-mono-numbers w-4 text-right">{strokeWidth}</span>
+      {/* Thickness with a live size dot */}
+      <div className="flex items-center gap-2 pr-1" title={`Thickness: ${strokeWidth}`}>
+        <span className="w-5 h-5 flex items-center justify-center shrink-0">
+          <span className="rounded-full" style={{ width: dot, height: dot, backgroundColor: color }} />
+        </span>
         <input
           type="range"
           min="2"
@@ -162,44 +268,47 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
           step="1"
           value={strokeWidth}
           onChange={(e) => setStrokeWidth(parseInt(e.target.value, 10))}
-          className="w-16 h-1.5 bg-[#252a3a] rounded-lg appearance-none cursor-pointer accent-blue-500"
+          className="w-16 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+          aria-label="Thickness"
         />
       </div>
 
-      <div className="w-[1px] h-6 bg-[#2a2f40]" />
+      <Divider />
 
-      {/* Undo, Redo, Clear */}
-      <div className="flex items-center gap-1">
-        <button
-          onClick={undo}
-          disabled={!canUndo}
-          className={`p-2 rounded-lg transition-colors ${
-            canUndo ? 'text-gray-300 hover:text-white hover:bg-[#202433]' : 'text-gray-600 cursor-not-allowed'
-          }`}
-          title="Undo (Ctrl+Z)"
-        >
-          <Undo2 className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={redo}
-          disabled={!canRedo}
-          className={`p-2 rounded-lg transition-colors ${
-            canRedo ? 'text-gray-300 hover:text-white hover:bg-[#202433]' : 'text-gray-600 cursor-not-allowed'
-          }`}
-          title="Redo (Ctrl+Y)"
-        >
-          <Redo2 className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={clearAll}
-          className="p-2 rounded-lg text-red-400 hover:text-red-300 hover:bg-red-500/20 transition-colors"
-          title="Clear All Annotations"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
+      <div className="flex items-center gap-0.5">
+        <IconButton onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)">
+          <Undo2 className={ic} />
+        </IconButton>
+        <IconButton onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Y)">
+          <Redo2 className={ic} />
+        </IconButton>
+        <IconButton onClick={clearAll} danger title="Clear all drawings">
+          <Trash2 className={ic} />
+        </IconButton>
       </div>
+
+      {floating && (
+        <>
+          <Divider />
+          <div className="flex items-center gap-0.5">
+            {onOpenStudio && (
+              <IconButton onClick={onOpenStudio} title="Show KLH Lecture Studio">
+                <AppWindow className={ic} />
+              </IconButton>
+            )}
+            {onCollapse && (
+              <IconButton onClick={onCollapse} title="Hide toolbar">
+                <ChevronUp className={ic} />
+              </IconButton>
+            )}
+            {onClose && (
+              <IconButton onClick={onClose} danger title="Stop drawing on screen">
+                <X className={ic} />
+              </IconButton>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 };

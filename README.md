@@ -1,6 +1,6 @@
-# Live Studio — Professional Screen Recording & YouTube Streaming Desktop Application
+# KLH Lecture Studio — Lecture Recording & YouTube Streaming for KLH University
 
-**Live Studio** is a production-oriented Windows desktop application that combines the capabilities of OBS Studio, an interactive screen annotation and presentation tool, and a tutorial recording studio with YouTube Live streaming integration.
+**KLH Lecture Studio** is a Windows desktop application for recording and live-streaming lectures: screen and webcam capture, live drawing directly on the shared screen, lecture branding, and YouTube Live streaming.
 
 ---
 
@@ -68,7 +68,9 @@
 - Dynamic monitor resolution changes and window geometry handling.
 
 ### ✏️ Annotation & Drawing Suite
-- **Complete Vector Tools**: Freehand pen, semi-transparent highlighter, straight line, directional vector arrow, rectangle, circle/ellipse, clickable text notes, glowing laser pointer with fading trail.
+- **Draw on the real screen**: when an entire display is the source, a transparent ink layer and a floating toolbar appear on that monitor. Draw over PowerPoint, a browser or any app; the drawings are captured with the screen, so they are recorded and streamed. The toolbar itself is excluded from capture, can be collapsed to a small tab and dragged anywhere. The Pointer tool (or the toggle-annotation hotkey, default `Ctrl+Alt+D`) makes the layer click-through again. Single-window sources are not supported for screen drawing; use the preview draw mode instead.
+- **Complete Vector Tools**: Freehand pen, semi-transparent highlighter, eraser (removes whole strokes), straight line, arrow, rectangle, ellipse, text notes, glowing laser pointer with fading trail.
+- **Keyboard**: `V` pointer, `P` pen, `H` highlighter, `E` eraser, `A` arrow, `L` line, `R` rectangle, `C` ellipse, `T` text, `X` laser, `Esc` back to pointer.
 - **Zero-Loss Compositing**: Annotations are rendered into the canvas frame-by-frame, ensuring that drawings are composited directly into the recorded MP4 output and outgoing YouTube Live stream.
 - **Aspect-Ratio & Scaling Independence**: Normalizes mouse/touch coordinates from display window resolution to the master 1920x1080 canvas coordinates.
 - **History**: Full multi-step Undo (`Ctrl+Z`), Redo (`Ctrl+Y`), and Clear All.
@@ -80,7 +82,7 @@
 - Acoustic Echo Cancellation and AI Noise Suppression.
 
 ### 🎬 Scene & Source Management
-- Multi-scene switcher: Tutorial Fullscreen, Screen + Webcam PiP, Webcam Presentation, Slides.
+- Multi-scene switcher: Full Screen, Screen + Webcam PiP, Webcam Presentation.
 - Add, duplicate, rename, and delete scenes without interrupting streams.
 - Full layer controls: Z-index reordering, visibility toggle (`Eye`), position lock (`Lock`), corner border-radius slider (for circular camera overlays), opacity slider.
 
@@ -113,9 +115,8 @@
 ### Installation
 ```bash
 # Clone and enter directory
-cd d:/LIVE_STREAM
+cd klh-screen
 
-# Dependencies are already installed in this repository
 npm install
 ```
 
@@ -129,7 +130,7 @@ npm run start
 ```bash
 npm test
 ```
-*Outputs: 7 passing tests covering FFmpeg resolution, coordinate scaling, undo/redo stacks, layer ordering, and telemetry parsing.*
+*Outputs: 16 passing tests covering FFmpeg resolution, coordinate scaling, undo/redo stacks, layer ordering, telemetry parsing and eraser hit-testing.*
 
 ### Building Production Windows Installer (.exe)
 ```bash
@@ -137,7 +138,7 @@ npm test
 npm run dist
 ```
 The resulting executable is generated at:
-`release/win-unpacked/Live Studio.exe`
+`release/win-unpacked/KLH Lecture Studio.exe`
 
 ---
 
@@ -169,7 +170,7 @@ Follow this checklist to verify the full studio workflow:
 ## 6. Project Structure
 
 ```
-d:/LIVE_STREAM/
+klh-screen/
 ├── src/
 │   ├── main/
 │   │   ├── capture/screenCapture.ts        # Desktop capturer source enumeration

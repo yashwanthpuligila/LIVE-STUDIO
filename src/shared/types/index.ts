@@ -73,6 +73,18 @@ export interface SceneSource {
   color?: string;
   fontSize?: number;
   fontColor?: string;
+  /** Webcam only: background blur / replacement */
+  background?: WebcamBackground;
+}
+
+export type WebcamBackgroundMode = 'none' | 'blur' | 'image';
+
+export interface WebcamBackground {
+  mode: WebcamBackgroundMode;
+  /** 'light' | 'strong' */
+  blur?: 'light' | 'strong';
+  /** 'preset:<id>' for built-in backgrounds, 'file:<name>' for uploaded images */
+  image?: string;
 }
 
 export interface Scene {
@@ -230,3 +242,31 @@ export interface DiskSpaceInfo {
   freeBytes: number;
   totalBytes: number;
 }
+
+// --- On-screen drawing overlay (ink layer + floating toolbar over the shared display) ---
+export interface OverlayState {
+  tool: AnnotationTool;
+  color: string;
+  strokeWidth: number;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+export type OverlayCommand =
+  | { type: 'setTool'; tool: AnnotationTool }
+  | { type: 'setColor'; color: string }
+  | { type: 'setStrokeWidth'; width: number }
+  | { type: 'undo' }
+  | { type: 'redo' }
+  | { type: 'clear' }
+  | { type: 'toggleDraw' };
+
+/** Recording state mirrored from the studio to the floating toolbar. */
+export interface OverlayRecordingState {
+  status: RecordingStatus;
+  durationSec: number;
+  /** Intro/outro clip playing: controls are locked until it ends */
+  locked: boolean;
+}
+
+export type OverlayRecordingCommand = 'start' | 'pause' | 'resume' | 'stop';

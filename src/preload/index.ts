@@ -7,6 +7,10 @@ import {
   DiskSpaceInfo,
   EncoderCapability,
   HardwareProfile,
+  OverlayCommand,
+  OverlayRecordingCommand,
+  OverlayRecordingState,
+  OverlayState,
   RecordingItem,
   RecordingStartOptions,
   RecordingStatus,
@@ -105,6 +109,66 @@ const api = {
     removeClip: (kind: BrandClipKind, pin: string): Promise<BrandingInfo> =>
       ipcRenderer.invoke('branding:removeClip', kind, pin),
     readClip: (kind: BrandClipKind): Promise<ArrayBuffer | null> => ipcRenderer.invoke('branding:readClip', kind),
+  },
+
+  backgrounds: {
+    list: (): Promise<string[]> => ipcRenderer.invoke('backgrounds:list'),
+    choose: (): Promise<string | null> => ipcRenderer.invoke('backgrounds:choose'),
+    read: (name: string): Promise<ArrayBuffer | null> => ipcRenderer.invoke('backgrounds:read', name),
+    remove: (name: string): Promise<boolean> => ipcRenderer.invoke('backgrounds:remove', name),
+  },
+
+  overlay: {
+    // Studio window
+    show: (displayId?: string): Promise<boolean> => ipcRenderer.invoke('overlay:show', displayId),
+    hide: (): Promise<boolean> => ipcRenderer.invoke('overlay:hide'),
+    isVisible: (): Promise<boolean> => ipcRenderer.invoke('overlay:isVisible'),
+    onVisibilityChanged: (callback: (visible: boolean) => void) => {
+      const listener = (_: any, visible: boolean) => callback(visible);
+      ipcRenderer.on('overlay:visibility-changed', listener);
+      return () => {
+        ipcRenderer.removeListener('overlay:visibility-changed', listener);
+      };
+    },
+    sendRecordingState: (rec: OverlayRecordingState) => ipcRenderer.send('overlay:recordingState', rec),
+    onRecordingCommand: (callback: (cmd: OverlayRecordingCommand) => void) => {
+      const listener = (_: any, cmd: OverlayRecordingCommand) => callback(cmd);
+      ipcRenderer.on('overlay:recording-command', listener);
+      return () => {
+        ipcRenderer.removeListener('overlay:recording-command', listener);
+      };
+    },
+    // Ink layer
+    sendState: (state: OverlayState) => ipcRenderer.send('overlay:state', state),
+    onCommand: (callback: (cmd: OverlayCommand) => void) => {
+      const listener = (_: any, cmd: OverlayCommand) => callback(cmd);
+      ipcRenderer.on('overlay:command', listener);
+      return () => {
+        ipcRenderer.removeListener('overlay:command', listener);
+      };
+    },
+    // Floating toolbar
+    getState: (): Promise<OverlayState | null> => ipcRenderer.invoke('overlay:getState'),
+    onState: (callback: (state: OverlayState) => void) => {
+      const listener = (_: any, state: OverlayState) => callback(state);
+      ipcRenderer.on('overlay:state', listener);
+      return () => {
+        ipcRenderer.removeListener('overlay:state', listener);
+      };
+    },
+    command: (cmd: OverlayCommand) => ipcRenderer.send('overlay:command', cmd),
+    getRecordingState: (): Promise<OverlayRecordingState | null> => ipcRenderer.invoke('overlay:getRecordingState'),
+    onRecording: (callback: (rec: OverlayRecordingState) => void) => {
+      const listener = (_: any, rec: OverlayRecordingState) => callback(rec);
+      ipcRenderer.on('overlay:recording', listener);
+      return () => {
+        ipcRenderer.removeListener('overlay:recording', listener);
+      };
+    },
+    recordingCommand: (cmd: OverlayRecordingCommand) => ipcRenderer.send('overlay:recordingCommand', cmd),
+    setToolbarSize: (width: number, height: number) => ipcRenderer.send('overlay:toolbarSize', { width, height }),
+    close: () => ipcRenderer.send('overlay:close'),
+    openStudio: () => ipcRenderer.send('overlay:openStudio'),
   },
 
   obs: {

@@ -11,6 +11,8 @@ import { StreamingManager } from './streaming/streamingManager';
 import { EncoderDetector } from './recording/encoderDetector';
 import { getHardwareProfile } from './system/hardwareProfile';
 import { registerIpcHandlers } from './ipc';
+import { OverlayManager } from './overlay/overlayManager';
+import { loadRendererPage, preloadPath } from './window/rendererPage';
 
 // --- Critical Chromium Flags to Prevent Background / Occlusion Throttling ---
 // Without these, Windows minimizes or occluded windows freeze video capture to 0 FPS!
@@ -28,6 +30,7 @@ let brandingStore: BrandingStore;
 let screenCaptureManager: ScreenCaptureManager;
 let recordingManager: RecordingManager;
 let streamingManager: StreamingManager;
+let overlayManager: OverlayManager | null = null;
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
@@ -42,9 +45,7 @@ function createWindow() {
     // Packaged builds take the icon from the .exe; this covers dev runs
     icon: fs.existsSync(path.join(__dirname, '../../build/icon.ico')) ? path.join(__dirname, '../../build/icon.ico') : undefined,
     webPreferences: {
-      preload: fs.existsSync(path.join(__dirname, '../preload/index.cjs'))
-        ? path.join(__dirname, '../preload/index.cjs')
-        : path.join(__dirname, '../preload/index.js'),
+      preload: preloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -62,19 +63,12 @@ function createWindow() {
     mainWindow?.show();
   });
 
-  const htmlPath = path.join(__dirname, '../renderer/index.html');
-  if (process.env.VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-  } else if (fs.existsSync(htmlPath)) {
-    mainWindow.loadFile(htmlPath);
-  } else {
-    mainWindow.loadURL('http://localhost:5173').catch(() => {
-      mainWindow?.loadFile(htmlPath);
-    });
-  }
+  loadRendererPage(mainWindow);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // The overlay windows would otherwise keep the app alive with no studio behind them
+    overlayManager?.hide();
   });
 }
 
@@ -96,7 +90,9 @@ function registerShortcuts() {
       }
       if (settings.shortcuts.toggleAnnotation) {
         globalShortcut.register(settings.shortcuts.toggleAnnotation, () => {
-          mainWindow?.webContents.send('shortcut:toggleAnnotation');
+          // While drawing on screen, the hotkey flips between drawing and normal mouse use
+          if (overlayManager?.isVisible()) overlayManager.sendCommand({ type: 'toggleDraw' });
+          else mainWindow?.webContents.send('shortcut:toggleAnnotation');
         });
       }
       if (settings.shortcuts.toggleMic) {
@@ -129,6 +125,7 @@ if (!gotLock) {
     screenCaptureManager = new ScreenCaptureManager();
     recordingManager = new RecordingManager(recordingsStore);
     streamingManager = new StreamingManager(() => mainWindow);
+    overlayManager = new OverlayManager(() => mainWindow);
 
     // Modern Electron getDisplayMedia handler with system loopback audio
     // Passes the raw DesktopCapturerSource for exact native C++ WebRTC compatibility

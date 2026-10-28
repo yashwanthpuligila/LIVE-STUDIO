@@ -295,7 +295,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBackToStudio }) =>
                     </div>
                     <p className="text-[11px] text-gray-400">1080p @ 60 FPS • 6,000 kbps</p>
                     <p className="text-[10px] text-gray-500 mt-1">
-                      Ultra-smooth motion for high frame rate demonstrations and responsive gaming.
+                      Smoothest motion for software demos, simulations and fast scrolling.
                     </p>
                   </div>
                 </div>

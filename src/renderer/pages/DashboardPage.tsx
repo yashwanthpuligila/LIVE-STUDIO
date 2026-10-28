@@ -104,7 +104,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">Studio Dashboard</h1>
           <p className="text-gray-400 text-xs mt-1">
-            Capture displays, draw real-time vector annotations, record tutorial videos, and stream to YouTube Live.
+            Capture your screen, draw live annotations, record lectures and stream to YouTube Live.
           </p>
         </div>
 
@@ -123,7 +123,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 New Studio Session
               </h2>
               <p className="text-gray-400 text-xs mt-1.5 leading-relaxed">
-                Launch the central production studio with multi-layer scene compositing and drawing tools.
+                Open the studio to set up scenes, webcam, audio and drawing tools.
               </p>
             </div>
             <div className="flex items-center gap-1.5 text-blue-400 font-medium text-xs mt-6">
@@ -145,11 +145,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 Start Screen Recording
               </h2>
               <p className="text-gray-400 text-xs mt-1.5 leading-relaxed">
-                Record tutorials in crisp 1080p60 MP4 with microphone commentary and webcam overlay.
+                Record lectures as MP4 with your voice, webcam and on-screen drawings.
               </p>
             </div>
             <div className="flex items-center gap-1.5 text-red-400 font-medium text-xs mt-6">
-              <span>Record Tutorial</span>
+              <span>Record Lecture</span>
               <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
             </div>
           </div>

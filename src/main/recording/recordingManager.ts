@@ -343,7 +343,7 @@ export class RecordingManager {
       fps: session.fps,
       createdAt: new Date().toISOString(),
       encoder: successfulEncoder,
-      tags: ['Tutorial', 'Screen Capture', successfulEncoder.includes('Accelerated') ? 'Hardware Accel' : successfulEncoder.includes('remuxed') ? 'Fast Export' : 'Software'],
+      tags: ['Lecture', 'Screen Capture', successfulEncoder.includes('Accelerated') ? 'Hardware Accel' : successfulEncoder.includes('remuxed') ? 'Fast Export' : 'Software'],
     };
 
     // Store in recordings registry

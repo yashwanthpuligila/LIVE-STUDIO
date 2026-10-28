@@ -1,4 +1,7 @@
 import { LectureInfo, Scene, SceneSource } from '../../../shared/types';
+import { drawLaser, LaserPoint } from '../../annotations/annotationRenderer';
+import { BackgroundProcessor } from './backgroundEffects';
+import { WebcamBackground } from '../../../shared/types';
 
 export interface CompositionEngineOptions {
   width: number;
@@ -6,7 +9,6 @@ export interface CompositionEngineOptions {
   fps: number;
 }
 
-type LaserPoint = { x: number; y: number; time: number };
 
 // KLH brand palette: maroon from the wordmark, accent stripe from the multicolour "H"
 const BRAND_MAROON = '#9B2B2A';
@@ -53,6 +55,9 @@ export class CompositionEngine {
 
   // Video element cache for scene sources
   private videoElements: Map<string, HTMLVideoElement> = new Map();
+  // Webcam background blur/replacement, per source
+  private backgrounds = new Map<string, { effect: WebcamBackground; image: (CanvasImageSource & { width: number; height: number }) | null }>();
+  private bgProcessors = new Map<string, BackgroundProcessor>();
   // MediaStreams for sources
   private sourceStreams: Map<string, MediaStream> = new Map();
   // Primary desktop screen video element reference for cross-scene fallback
@@ -70,6 +75,8 @@ export class CompositionEngine {
   private lecture: LectureInfo | null = null;
   private logo: HTMLImageElement | null = null;
   private bannerCache: { key: string; canvas: HTMLCanvasElement | null } | null = null;
+  // Height of the banner strip in the last frame; sources are laid out below it
+  private contentTop = 0;
   private tagCache: { key: string; canvas: HTMLCanvasElement | null } | null = null;
 
   // Intro/outro clip currently replacing the scene (null when the live scene is shown)
@@ -228,7 +235,40 @@ export class CompositionEngine {
     this.markDirty();
   }
 
+  /** Blur or replace a webcam's background; pass null (or mode 'none') to turn it off. */
+  public setSourceBackground(
+    sourceId: string,
+    effect: WebcamBackground | null,
+    image: (CanvasImageSource & { width: number; height: number }) | null = null
+  ) {
+    if (!effect || effect.mode === 'none') {
+      this.backgrounds.delete(sourceId);
+      this.bgProcessors.get(sourceId)?.destroy();
+      this.bgProcessors.delete(sourceId);
+    } else {
+      this.backgrounds.set(sourceId, { effect, image });
+      this.bgProcessors.get(sourceId)?.setEffect(effect, image);
+    }
+    this.markDirty();
+  }
+
+  /** The processed webcam frame when a background effect is on and has produced output. */
+  private backgroundFrame(sourceId: string, video: HTMLVideoElement): HTMLCanvasElement | null {
+    const bg = this.backgrounds.get(sourceId);
+    if (!bg) return null;
+    let proc = this.bgProcessors.get(sourceId);
+    if (!proc || proc.video !== video) {
+      proc?.destroy();
+      proc = new BackgroundProcessor(video, () => this.markDirty());
+      proc.setEffect(bg.effect, bg.image);
+      this.bgProcessors.set(sourceId, proc);
+    }
+    return proc.ready ? proc.canvas : null;
+  }
+
   private detachVideo(sourceId: string) {
+    this.bgProcessors.get(sourceId)?.destroy();
+    this.bgProcessors.delete(sourceId);
     const video = this.videoElements.get(sourceId);
     if (!video) return;
     try {
@@ -351,14 +391,16 @@ export class CompositionEngine {
 
     if (!this.activeScene) return;
 
+    // The lecture banner gets its own strip at the top; the scene is laid out in the area below it
+    // so the banner never hides the top of the screen
+    const banner = this.getBanner(w, h);
+    this.contentTop = banner ? banner.height : 0;
+
     // 2. Render each visible source (pre-sorted by zIndex in setScene)
     for (const source of this.sortedSources) {
       if (!source.visible) continue;
 
-      const sx = (source.x / 100) * w;
-      const sy = (source.y / 100) * h;
-      const sw = (source.width / 100) * w;
-      const sh = (source.height / 100) * h;
+      const { x: sx, y: sy, w: sw, h: sh } = this.sourceRect(source, w, h);
 
       const opacity = source.opacity ?? 1.0;
       const rounded = !!source.borderRadius && source.borderRadius > 0;
@@ -396,7 +438,16 @@ export class CompositionEngine {
         }
 
         if (video && video.readyState >= 2 && !video.paused) {
-          ctx.drawImage(video, sx, sy, sw, sh);
+          if ((source.type === 'screen' || source.type === 'window') && video.videoWidth > 0 && video.videoHeight > 0) {
+            // Keep the screen's aspect ratio (it no longer matches once the banner takes its strip)
+            const scale = Math.min(sw / video.videoWidth, sh / video.videoHeight);
+            const dw = video.videoWidth * scale;
+            const dh = video.videoHeight * scale;
+            ctx.drawImage(video, sx + (sw - dw) / 2, sy + (sh - dh) / 2, dw, dh);
+          } else {
+            const processed = source.type === 'webcam' ? this.backgroundFrame(source.id, video) : null;
+            ctx.drawImage(processed ?? video, sx, sy, sw, sh);
+          }
         } else {
           // Placeholder card when stream not yet connected
           ctx.fillStyle = '#181b24';
@@ -420,7 +471,7 @@ export class CompositionEngine {
     }
 
     // 3. Lecture branding: name tag under the webcam, then the top banner
-    this.drawLectureOverlays(ctx, w, h);
+    this.drawLectureOverlays(ctx, w, h, banner);
 
     // 4. Composite Annotation Layer directly into the frame (skipped while empty)
     if (this.annotationCanvas && this.annotationHasContent) {
@@ -428,31 +479,27 @@ export class CompositionEngine {
     }
 
     // 5. Render Laser pointer trails if active
-    if (laserPoints.length > 0) {
-      const now = Date.now();
-      for (const pt of laserPoints) {
-        const age = now - pt.time;
-        const alpha = Math.max(0, 1 - age / 500);
-
-        const grad = ctx.createRadialGradient(pt.x, pt.y, 2, pt.x, pt.y, 24);
-        grad.addColorStop(0, `rgba(239, 68, 68, ${alpha})`);
-        grad.addColorStop(0.5, `rgba(239, 68, 68, ${alpha * 0.4})`);
-        grad.addColorStop(1, 'rgba(239, 68, 68, 0)');
-
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 24, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
+    if (laserPoints.length > 0) drawLaser(ctx, laserPoints, 24);
   }
 
-  private drawLectureOverlays(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  /** Height of the lecture banner strip; scene sources are laid out below it. */
+  public getContentTop(): number {
+    return this.getBanner(this.width, this.height)?.height ?? 0;
+  }
+
+  /** Where a source lands on the canvas: its percentages apply to the area below the banner. */
+  private sourceRect(source: SceneSource, w: number, h: number) {
+    const top = this.contentTop;
+    const areaH = h - top;
+    return {
+      x: (source.x / 100) * w,
+      y: top + (source.y / 100) * areaH,
+      w: (source.width / 100) * w,
+      h: (source.height / 100) * areaH,
+    };
+  }
+
+  private drawLectureOverlays(ctx: CanvasRenderingContext2D, w: number, h: number, banner: HTMLCanvasElement | null) {
     const tag = this.getNameTag(w, h);
     if (tag) {
       // Attach to the top-most visible webcam: centred just below it, or inside its bottom edge
@@ -463,9 +510,10 @@ export class CompositionEngine {
       let x: number;
       let y: number;
       if (cam) {
-        const cx = (cam.x / 100) * w;
-        const cw = (cam.width / 100) * w;
-        const bottom = ((cam.y + cam.height) / 100) * h;
+        const r = this.sourceRect(cam, w, h);
+        const cx = r.x;
+        const cw = r.w;
+        const bottom = r.y + r.h;
         x = Math.min(Math.max(0, cx + (cw - tag.width) / 2), w - tag.width);
         y = bottom + gap + tag.height <= h ? bottom + gap : bottom - gap - tag.height;
       } else {
@@ -475,7 +523,6 @@ export class CompositionEngine {
       ctx.drawImage(tag, Math.round(x), Math.round(y));
     }
 
-    const banner = this.getBanner(w, h);
     if (banner) ctx.drawImage(banner, 0, 0);
   }
 
@@ -645,6 +692,8 @@ export class CompositionEngine {
 
   public destroy() {
     this.stop();
+    this.bgProcessors.forEach((p) => p.destroy());
+    this.bgProcessors.clear();
     this.clipVideo = null;
     this.videoElements.forEach(v => {
       try {

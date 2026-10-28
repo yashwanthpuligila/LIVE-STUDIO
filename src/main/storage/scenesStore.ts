@@ -6,7 +6,7 @@ import { Scene } from '../../shared/types';
 const defaultScenes: Scene[] = [
   {
     id: 'scene-tutorial',
-    name: 'Screen Tutorial',
+    name: 'Full Screen',
     isSelected: true,
     sources: [
       {
@@ -97,6 +97,16 @@ export class ScenesStore {
         this.scenes = JSON.parse(raw);
         if (!this.scenes || this.scenes.length === 0) {
           this.scenes = defaultScenes;
+        } else {
+          // Older installs saved the main scene as "Screen Tutorial"
+          let renamed = false;
+          for (const sc of this.scenes) {
+            if (sc.id === 'scene-tutorial' && sc.name === 'Screen Tutorial') {
+              sc.name = 'Full Screen';
+              renamed = true;
+            }
+          }
+          if (renamed) this.save();
         }
       } else {
         this.scenes = defaultScenes;

@@ -7,6 +7,8 @@ import assert from 'assert';
 import path from 'path';
 import fs from 'fs';
 import { getFFmpegPath } from '../src/main/utils/ffmpegHelper';
+import { hitTestElement, eraserRadius } from '../src/renderer/annotations/annotationRenderer';
+import { AnnotationElement } from '../src/shared/types';
 
 let passed = 0;
 let failed = 0;
@@ -226,6 +228,36 @@ async function runAllTests() {
 
     assert.strictEqual(frameQueue.length, MAX_QUEUE_SIZE, 'Queue size must never exceed boundary');
     assert.strictEqual(frameQueue[frameQueue.length - 1], 99, 'Queue must retain latest frame');
+  });
+
+  console.log('\n10. Eraser Hit-Testing Tests:');
+  const el = (tool: AnnotationElement['tool'], points: { x: number; y: number }[], extra: Partial<AnnotationElement> = {}): AnnotationElement =>
+    ({ id: tool, tool, points, color: '#fff', strokeWidth: 6, opacity: 1, ...extra });
+  const r = eraserRadius(6);
+
+  it('Should erase a pen stroke when touching it and miss it when far away', () => {
+    const stroke = el('pen', [{ x: 100, y: 100 }, { x: 300, y: 100 }]);
+    assert(hitTestElement(stroke, { x: 200, y: 110 }, r), 'touching stroke should hit');
+    assert(!hitTestElement(stroke, { x: 200, y: 160 }, r), 'distant point should miss');
+  });
+
+  it('Should erase a rectangle only along its outline, not its empty interior', () => {
+    const rect = el('rect', [{ x: 100, y: 100 }, { x: 500, y: 400 }]);
+    assert(hitTestElement(rect, { x: 102, y: 250 }, r), 'edge should hit');
+    assert(!hitTestElement(rect, { x: 300, y: 250 }, r), 'centre should miss');
+  });
+
+  it('Should erase an ellipse along its outline', () => {
+    const circle = el('circle', [{ x: 100, y: 100 }, { x: 300, y: 300 }]);
+    assert(hitTestElement(circle, { x: 300, y: 200 }, r), 'rightmost point should hit');
+    assert(!hitTestElement(circle, { x: 200, y: 200 }, r), 'centre should miss');
+  });
+
+  it('Should erase arrows and text notes', () => {
+    assert(hitTestElement(el('arrow', [{ x: 0, y: 0 }, { x: 200, y: 200 }]), { x: 100, y: 104 }, r), 'arrow shaft should hit');
+    const note = el('text', [{ x: 100, y: 200 }], { text: 'Hello', fontSize: 32 });
+    assert(hitTestElement(note, { x: 130, y: 190 }, r), 'inside text box should hit');
+    assert(!hitTestElement(note, { x: 130, y: 300 }, r), 'below text should miss');
   });
 
   console.log('\n========================================');
