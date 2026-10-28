@@ -24,7 +24,7 @@ const CLIP_ON = 'bg-red-500 shadow-[0_0_8px_#ef4444]';
 const CLIP_OFF = 'bg-[#252a3a]';
 
 /** VU meter that updates its own DOM nodes directly instead of going through React state. */
-const LevelMeter: React.FC<{
+export const LevelMeter: React.FC<{
   channel: 'mic' | 'desktop';
   muted: boolean;
   readLevels: ReadLevels;

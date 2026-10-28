@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { NoiseSuppressionLevel } from '../../../shared/types';
+import { createRnnoiseNode } from './noiseSuppression';
+
+/** What the mic filter is actually doing right now (strong can fall back to standard). */
+export type NoiseStatus = 'off' | 'standard' | 'loading' | 'strong' | 'fallback';
 
 export interface AudioDeviceOption {
   deviceId: string;
@@ -41,9 +46,12 @@ function calculateLevel(analyser: AnalyserNode | null, buffer: Float32Array<Arra
 
 export function useAudioMixer(options?: {
   defaultMicId?: string;
-  noiseSuppression?: boolean;
+  noiseLevel?: NoiseSuppressionLevel;
   echoCancellation?: boolean;
+  autoGainControl?: boolean;
 }) {
+  const noiseLevel = options?.noiseLevel ?? 'strong';
+  const [noiseStatus, setNoiseStatus] = useState<NoiseStatus>('off');
   const [micDevices, setMicDevices] = useState<AudioDeviceOption[]>([]);
   const [selectedMicId, setSelectedMicId] = useState<string>(options?.defaultMicId || 'default');
 
@@ -70,6 +78,7 @@ export function useAudioMixer(options?: {
   const micGainRef = useRef<GainNode | null>(null);
   const micAnalyserRef = useRef<AnalyserNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
+  const micDenoiseRef = useRef<{ destroy(): void; disconnect(): void } | null>(null);
 
   const desktopSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const desktopGainRef = useRef<GainNode | null>(null);
@@ -166,14 +175,17 @@ export function useAudioMixer(options?: {
         try { micSourceRef.current.disconnect(); } catch {}
         micSourceRef.current = null;
       }
+      releaseDenoiser();
 
       try {
+        const ctx = audioContextRef.current;
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
-            noiseSuppression: options?.noiseSuppression ?? true,
+            // Strong mode feeds RNNoise the raw signal; stacking Chromium's filter on top garbles speech
+            noiseSuppression: noiseLevel === 'standard',
             echoCancellation: options?.echoCancellation ?? true,
-            autoGainControl: true,
+            autoGainControl: options?.autoGainControl ?? true,
           },
           video: false,
         });
@@ -184,12 +196,45 @@ export function useAudioMixer(options?: {
         }
 
         micStreamRef.current = stream;
-        const source = audioContextRef.current.createMediaStreamSource(stream);
-        source.connect(micGainRef.current);
+        const source = ctx.createMediaStreamSource(stream);
         micSourceRef.current = source;
+
+        if (noiseLevel !== 'strong') {
+          source.connect(micGainRef.current);
+          setNoiseStatus(noiseLevel);
+          return;
+        }
+
+        setNoiseStatus('loading');
+        try {
+          const denoise = await createRnnoiseNode(ctx);
+          if (!active) {
+            denoise.destroy();
+            return;
+          }
+          source.connect(denoise);
+          denoise.connect(micGainRef.current);
+          micDenoiseRef.current = denoise;
+          setNoiseStatus('strong');
+        } catch (err) {
+          // Keep the mic working with the built-in filter rather than going silent
+          console.warn('[Audio] AI noise suppression unavailable, using standard filter:', err);
+          if (!active) return;
+          source.connect(micGainRef.current);
+          stream.getAudioTracks()[0]?.applyConstraints({ noiseSuppression: true }).catch(() => {});
+          setNoiseStatus('fallback');
+        }
       } catch (err) {
         console.warn('Could not acquire microphone stream:', err);
       }
+    }
+
+    function releaseDenoiser() {
+      const node = micDenoiseRef.current;
+      micDenoiseRef.current = null;
+      if (!node) return;
+      try { node.disconnect(); } catch {}
+      try { node.destroy(); } catch {}
     }
 
     setupMic();
@@ -199,8 +244,9 @@ export function useAudioMixer(options?: {
       if (micStreamRef.current) {
         micStreamRef.current.getTracks().forEach(t => t.stop());
       }
+      releaseDenoiser();
     };
-  }, [selectedMicId, options?.noiseSuppression, options?.echoCancellation]);
+  }, [selectedMicId, noiseLevel, options?.echoCancellation, options?.autoGainControl]);
 
   // Attach desktop audio stream if available
   const attachDesktopAudioStream = useCallback((stream: MediaStream) => {
@@ -310,5 +356,6 @@ export function useAudioMixer(options?: {
     readLevels,
     playClipAudio,
     masterAudioStream,
+    noiseStatus,
   };
 }

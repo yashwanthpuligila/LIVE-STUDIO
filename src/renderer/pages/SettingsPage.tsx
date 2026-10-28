@@ -19,7 +19,8 @@ import {
   Zap,
   Monitor,
 } from 'lucide-react';
-import { AppSettings, DiskSpaceInfo, EncoderCapability, HardwareProfile } from '../../shared/types';
+import { AppSettings, DiskSpaceInfo, EncoderCapability, HardwareProfile, NoiseSuppressionLevel } from '../../shared/types';
+import { resolveNoiseLevel } from '../studio/audio/noiseSuppression';
 import { BrandingAdminPanel } from '../settings/BrandingAdminPanel';
 
 interface SettingsPageProps {
@@ -498,15 +499,36 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBackToStudio }) =>
                   </select>
                 </div>
 
+                <div className="flex items-center justify-between gap-4 p-3 bg-[#181b26] rounded-xl border border-[#252a3a]">
+                  <div>
+                    <span className="font-medium text-gray-200">Noise Suppression</span>
+                    <p className="text-gray-500 text-[11px]">
+                      Strong (AI) removes fans, air conditioning, keyboard clicks and background chatter. Standard is a lighter built-in filter.
+                    </p>
+                  </div>
+                  <select
+                    value={resolveNoiseLevel(settings)}
+                    onChange={(e) => {
+                      const level = e.target.value as NoiseSuppressionLevel;
+                      setSettings({ ...settings, noiseSuppressionLevel: level, noiseSuppression: level !== 'off' });
+                    }}
+                    className="bg-[#10121a] border border-[#2f3547] rounded-lg px-2 py-1.5 text-gray-200 text-xs focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="off">Off</option>
+                    <option value="standard">Standard</option>
+                    <option value="strong">Strong (AI)</option>
+                  </select>
+                </div>
+
                 <div className="flex items-center justify-between p-3 bg-[#181b26] rounded-xl border border-[#252a3a]">
                   <div>
-                    <span className="font-medium text-gray-200">AI Noise Suppression</span>
-                    <p className="text-gray-500 text-[11px]">Filters out background fan hum, air conditioning, and room noise.</p>
+                    <span className="font-medium text-gray-200">Auto Volume</span>
+                    <p className="text-gray-500 text-[11px]">Keeps your voice at an even level as you move closer to or away from the mic.</p>
                   </div>
                   <input
                     type="checkbox"
-                    checked={settings.noiseSuppression}
-                    onChange={(e) => setSettings({ ...settings, noiseSuppression: e.target.checked })}
+                    checked={settings.autoGainControl ?? true}
+                    onChange={(e) => setSettings({ ...settings, autoGainControl: e.target.checked })}
                     className="w-4 h-4 accent-blue-600 rounded"
                   />
                 </div>

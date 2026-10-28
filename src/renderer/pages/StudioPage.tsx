@@ -53,6 +53,8 @@ import { YouTubeLiveModal } from '../studio/YouTubeLiveModal';
 import { PerformancePanel } from '../studio/PerformancePanel';
 import { LectureInfoPanel } from '../studio/LectureInfoPanel';
 import { CameraPanel } from '../studio/CameraPanel';
+import { MicrophonePanel } from '../studio/audio/MicrophonePanel';
+import { resolveNoiseLevel } from '../studio/audio/noiseSuppression';
 import { BrandMark } from '../components/BrandMark';
 import klhLogoUrl from '../assets/klh-logo.png';
 
@@ -102,10 +104,18 @@ export const StudioPage: React.FC<StudioPageProps> = ({
     readLevels,
     playClipAudio,
     masterAudioStream,
+    noiseStatus,
   } = useAudioMixer({
-    noiseSuppression: settings?.noiseSuppression,
+    noiseLevel: resolveNoiseLevel(settings),
     echoCancellation: settings?.echoCancellation,
+    autoGainControl: settings?.autoGainControl ?? true,
   });
+
+  // Microphone card: apply immediately and save
+  const updateAudioSettings = (partial: Partial<AppSettings>) => {
+    setSettings((prev) => (prev ? { ...prev, ...partial } : prev));
+    window.electronAPI?.settings.update(partial);
+  };
 
   // --- Annotation Hook ---
   const {
@@ -1269,6 +1279,19 @@ export const StudioPage: React.FC<StudioPageProps> = ({
               videoDevices={videoDevices}
               onUpdate={handleUpdateSource}
               onAddCamera={handleAddWebcamSource}
+            />
+            <MicrophonePanel
+              micDevices={micDevices}
+              selectedMicId={selectedMicId}
+              onSelectMicId={setSelectedMicId}
+              micState={micState}
+              onToggleMute={toggleMicMute}
+              readLevels={readLevels}
+              noiseLevel={resolveNoiseLevel(settings)}
+              noiseStatus={noiseStatus}
+              echoCancellation={settings?.echoCancellation ?? true}
+              autoGainControl={settings?.autoGainControl ?? true}
+              onChangeSettings={updateAudioSettings}
             />
             <PropertiesPanel
               source={selectedSource}

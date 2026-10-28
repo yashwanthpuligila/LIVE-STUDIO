@@ -16,7 +16,9 @@ const defaultSettings: AppSettings = {
   defaultWebcamId: 'default',
   includeSystemAudio: true,
   noiseSuppression: true,
+  noiseSuppressionLevel: 'strong',
   echoCancellation: true,
+  autoGainControl: true,
   youtubeStreamKey: '',
   youtubeRtmpUrl: 'rtmps://a.rtmp.youtube.com/live2',
   hardwareAcceleration: true,
@@ -69,6 +71,10 @@ export class ConfigStore {
         const raw = fs.readFileSync(this.configPath, 'utf-8');
         const parsed = JSON.parse(raw);
         const merged = { ...defaultSettings, ...parsed };
+        // Settings saved before noise levels existed: keep "off" for users who had turned it off
+        if (parsed.noiseSuppressionLevel === undefined && parsed.noiseSuppression === false) {
+          merged.noiseSuppressionLevel = 'off';
+        }
         
         // Decrypt stream key if safeStorage is available
         merged.youtubeStreamKey = this.getDecryptedStreamKey(merged.youtubeStreamKey);

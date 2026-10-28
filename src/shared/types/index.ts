@@ -123,6 +123,8 @@ export interface AnnotationElement {
   timestamp?: number;
 }
 
+export type NoiseSuppressionLevel = 'off' | 'standard' | 'strong';
+
 export interface EncoderCapability {
   id: string;
   name: string;
@@ -215,7 +217,10 @@ export interface AppSettings {
   defaultWebcamId: string;
   includeSystemAudio: boolean;
   noiseSuppression: boolean;
+  /** 'standard' = Chromium's built-in filter, 'strong' = RNNoise AI model. Falls back to noiseSuppression when unset. */
+  noiseSuppressionLevel?: NoiseSuppressionLevel;
   echoCancellation: boolean;
+  autoGainControl?: boolean;
   youtubeStreamKey: string;
   youtubeRtmpUrl: string;
   hardwareAcceleration: boolean;
